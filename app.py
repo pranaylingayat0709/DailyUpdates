@@ -32,11 +32,12 @@ client = OpenAI(
 # VOICE / LANGUAGE CONFIG
 # ---------------------------------------------------
 VOICE_OPTIONS = {
-    "🇮🇳 English – Indian accent":     {"lang": "en", "tld": "co.in"},
-    "🇺🇸 English – American accent":   {"lang": "en", "tld": "us"},
-    "🇦🇺 English – Australian accent": {"lang": "en", "tld": "com.au"},
-    "🇮🇳 हिन्दी – Hindi":              {"lang": "hi", "tld": "co.in"},
-    "🇮🇳 मराठी – Marathi":             {"lang": "mr", "tld": "co.in"},
+    "🇮🇳 English – Indian":   {"lang": "en", "tld": "co.in"},
+    "🌐 English – Global":    {"lang": "en", "tld": "com"},
+    "🇬🇧 English – UK":       {"lang": "en", "tld": "co.uk"},
+    "🇨🇦 English – Canada":   {"lang": "en", "tld": "ca"},
+    "🇮🇳 हिन्दी – Hindi":     {"lang": "hi", "tld": "co.in"},
+    "🇮🇳 मराठी – Marathi":    {"lang": "mr", "tld": "co.in"},
 }
 
 LANG_LABEL = {
@@ -63,7 +64,7 @@ LANG_INSTRUCTION = {
 LOADER_STAGES = [
     ("🌸", "Waking up your morning brief…"),
     ("📡", "Fetching today's news streams…"),
-    ("🧠", "Crafting insights with NVIDIA NIM…"),
+    ("🧠", "Crafting your personalised insights…"),
     ("🎙️", "Weaving your audio script…"),
     ("🎵", "Generating voice audio…"),
     ("✨", "Polishing your mindful digest…"),
@@ -88,7 +89,7 @@ STRICT RULES:
 
 Return a JSON object with EXACTLY these keys:
 {{
-  "greeting": "Warm welcoming sentence addressing Pranay personally.",
+  "greeting": "Warm, generic welcoming sentence for any listener — do NOT use any personal name.",
   "weather": "One-sentence forecast for the requested cities.",
   "india_news": [{{"headline": "Key Phrase", "detail": "One clear sentence."}}],
   "global_news": [{{"headline": "Key Phrase", "detail": "One clear sentence."}}],
@@ -106,7 +107,14 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@300;400;500;600&display=swap');
 
-/* ── BASE ── */
+/* ── GLOBAL HEADING COLOR OVERRIDE (beats Streamlit defaults) ── */
+h1, h2, h3, h4, h5, h6,
+[data-testid] h1, [data-testid] h2, [data-testid] h3 {
+    color: #1E1535 !important;
+    -webkit-text-fill-color: #1E1535 !important;
+}
+
+
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif !important;
     background-color: #F5F0FF !important;
@@ -385,10 +393,14 @@ div[data-testid="stTextInput"] input:focus {
 .badge-tech    { background: linear-gradient(135deg,#D1FAE5,#A7F3D0); }
 .badge-focus   { background: linear-gradient(135deg,#EDE9FE,#DDD6FE); }
 .badge-word    { background: linear-gradient(135deg,#FFE4E6,#FECDD3); }
-.section-title {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.4rem; font-weight: 800;
-    color: #1E1535; letter-spacing: -0.4px; margin: 0;
+.section-title,
+h2.section-title,
+.section-header h2,
+.section-header .section-title {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 1.4rem !important; font-weight: 800 !important;
+    color: #1E1535 !important; letter-spacing: -0.4px !important; margin: 0 !important;
+    -webkit-text-fill-color: #1E1535 !important;
 }
 
 /* ── GREETING ── */
@@ -631,11 +643,12 @@ if trigger_brief:
     try:
         current_date = datetime.now().strftime("%A, %B %d, %Y")
         prompt_payload = f"""
-Generate today's complete customised daily briefing for Pranay.
+Generate today's complete daily briefing for a general listener.
 Date: {current_date}
-Weather cities: {city} (primary) and any nearby relevant location.
+Weather city: {city}
 Tech focus: Backend systems, Java/Spring Boot, PostgreSQL, Quantum Computing.
 Provide exactly 5 highly critical items each for national, international, and tech updates.
+Do NOT address the listener by any personal name — greeting must be warm but generic (e.g. "Good morning!" or "Welcome to SatiCast!").
 Voice/accent selected: {voice_choice}
 """
         completion = client.chat.completions.create(
@@ -681,7 +694,7 @@ Voice/accent selected: {voice_choice}
         sep()
 
         # ── GREETING & WEATHER ──
-        greeting = payload.get("greeting", "Good morning, Pranay!")
+        greeting = payload.get("greeting", "Good morning! Welcome to SatiCast.")
         weather  = payload.get("weather", "")
         st.markdown(f"""
         <div class="sati-section d1">
@@ -796,7 +809,7 @@ Voice/accent selected: {voice_choice}
         # ── FOOTER ──
         st.markdown(f"""
         <div class="sati-footer">
-            <p>🪷 SatiCast &nbsp;·&nbsp; {datetime.now().strftime("%A, %B %d %Y")} &nbsp;·&nbsp; {city} &nbsp;·&nbsp; {voice_choice} &nbsp;·&nbsp; Powered by NVIDIA NIM</p>
+            <p>🪷 SatiCast &nbsp;·&nbsp; {datetime.now().strftime("%A, %B %d %Y")} &nbsp;·&nbsp; 🌆 {city} &nbsp;·&nbsp; {voice_choice}</p>
         </div>
         """, unsafe_allow_html=True)
 
