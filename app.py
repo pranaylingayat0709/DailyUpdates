@@ -202,6 +202,174 @@ def fetch_markets() -> dict:
     return result
 
 
+@st.cache_data(ttl=86400, show_spinner=False)   # cache for full day — changes at midnight
+def fetch_quote_of_day() -> dict:
+    """
+    Fetch a real quote from ZenQuotes API (free, no key needed).
+    Returns {quote, author, source} or fallback dict.
+    """
+    sources_tried = []
+    # ── Source 1: ZenQuotes ──
+    try:
+        r = requests.get("https://zenquotes.io/api/today", timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            if data and isinstance(data, list):
+                q = data[0]
+                return {
+                    "quote":       q.get("q", ""),
+                    "author":      q.get("a", "Unknown"),
+                    "source":      "ZenQuotes",
+                    "source_url":  "https://zenquotes.io",
+                }
+        sources_tried.append("ZenQuotes")
+    except Exception:
+        sources_tried.append("ZenQuotes")
+
+    # ── Source 2: Quotable.io ──
+    try:
+        r = requests.get("https://api.quotable.io/random?minLength=60&maxLength=180", timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                "quote":      data.get("content", ""),
+                "author":     data.get("author", "Unknown"),
+                "source":     "Quotable.io",
+                "source_url": "https://quotable.io",
+            }
+        sources_tried.append("Quotable")
+    except Exception:
+        sources_tried.append("Quotable")
+
+    # ── Fallback: curated rotating pool keyed by day-of-year ──
+    pool = [
+        {"quote": "The present moment is the only moment available to us, and it is the door to all moments.", "author": "Thich Nhat Hanh"},
+        {"quote": "Wherever you are, be all there.", "author": "Jim Elliot"},
+        {"quote": "Do not dwell in the past, do not dream of the future, concentrate the mind on the present moment.", "author": "Buddha"},
+        {"quote": "The quality of your attention determines the quality of other people's thinking.", "author": "Nancy Kline"},
+        {"quote": "Almost everything will work again if you unplug it for a few minutes — including you.", "author": "Anne Lamott"},
+        {"quote": "In the middle of difficulty lies opportunity.", "author": "Albert Einstein"},
+        {"quote": "It does not matter how slowly you go as long as you do not stop.", "author": "Confucius"},
+        {"quote": "Simplicity is the ultimate sophistication.", "author": "Leonardo da Vinci"},
+        {"quote": "The secret of getting ahead is getting started.", "author": "Mark Twain"},
+        {"quote": "A small daily task, if it be really daily, will beat the labours of a spasmodic Hercules.", "author": "Anthony Trollope"},
+        {"quote": "Focus on being productive instead of busy.", "author": "Tim Ferriss"},
+        {"quote": "Clarity about what matters provides clarity about what does not.", "author": "Cal Newport"},
+        {"quote": "Your mind is for having ideas, not holding them.", "author": "David Allen"},
+        {"quote": "First, solve the problem. Then, write the code.", "author": "John Johnson"},
+        {"quote": "Weeks of coding can save you hours of planning.", "author": "Unknown"},
+    ]
+    idx = datetime.now().timetuple().tm_yday % len(pool)
+    entry = pool[idx]
+    return {
+        "quote":      entry["quote"],
+        "author":     entry["author"],
+        "source":     "SatiCast Daily Collection",
+        "source_url": "",
+    }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)   # cache for full day
+def fetch_word_of_day() -> dict:
+    """
+    Fetch a real Word of the Day.
+    Strategy:
+      1. Wordnik API (if key present in secrets)
+      2. Free Dictionary API — picks a curated daily word, fetches live definition
+      3. Rotating curated fallback pool
+    Returns {word, pos, definition, example, source, source_url}
+    """
+    WORDNIK_KEY = st.secrets.get("WORDNIK_API_KEY", "")
+
+    # ── Source 1: Wordnik (best, needs free key) ──
+    if WORDNIK_KEY:
+        try:
+            url = f"https://api.wordnik.com/v4/words.json/wordOfTheDay?api_key={WORDNIK_KEY}"
+            r   = requests.get(url, timeout=6)
+            if r.status_code == 200:
+                d    = r.json()
+                word = d.get("word", "")
+                defs = d.get("definitions", [])
+                exas = d.get("examples", [])
+                pos  = defs[0].get("partOfSpeech", "") if defs else ""
+                defn = defs[0].get("text", "")          if defs else ""
+                exam = exas[0].get("text", "")          if exas else ""
+                if word and defn:
+                    return {
+                        "word":       word.capitalize(),
+                        "pos":        pos,
+                        "definition": defn,
+                        "example":    exam,
+                        "source":     "Wordnik",
+                        "source_url": f"https://www.wordnik.com/words/{word}",
+                    }
+        except Exception:
+            pass
+
+    # ── Source 2: Free Dictionary API — curated daily word list ──
+    # Pick a word based on day-of-year so it changes daily without an API key
+    daily_words = [
+        "sonder","ephemeral","petrichor","hiraeth","wanderlust","serendipity",
+        "mellifluous","eloquent","perspicacious","resilience","equanimity",
+        "cogent","luminous","taciturn","loquacious","sagacious","tenacious",
+        "effervescent","mercurial","pragmatic","esoteric","juxtapose","ubiquitous",
+        "paradox","catalyst","paradigm","empirical","synthesis","metamorphosis",
+        "momentum","velocity","integrity","perseverance","discernment","confluence",
+        "acumen","gravitas","penchant","nuance","ardent","fervid","celerity",
+        "alacrity","aplomb","candor","efficacy","fastidious","incisive","lucid",
+        "meticulous","poise","quandary","rigor","sagacity","veracity","zeal",
+        "adroit","astute","brevity","clarity","deft","erudite","forthright",
+        "heuristic","immutable","judicious","kinetic","latent","myriad",
+    ]
+    day_idx  = datetime.now().timetuple().tm_yday % len(daily_words)
+    word     = daily_words[day_idx]
+
+    try:
+        url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+        r   = requests.get(url, timeout=6)
+        if r.status_code == 200:
+            entries  = r.json()
+            meanings = entries[0].get("meanings", []) if entries else []
+            if meanings:
+                m    = meanings[0]
+                defs = m.get("definitions", [])
+                pos  = m.get("partOfSpeech", "")
+                defn = defs[0].get("definition", "") if defs else ""
+                exam = defs[0].get("example", "")    if defs else ""
+                if defn:
+                    return {
+                        "word":       word.capitalize(),
+                        "pos":        pos,
+                        "definition": defn,
+                        "example":    exam,
+                        "source":     "Free Dictionary",
+                        "source_url": f"https://www.merriam-webster.com/dictionary/{word}",
+                    }
+    except Exception:
+        pass
+
+    # ── Fallback pool (same day-rotation) ──
+    fallback = [
+        {"word":"Sonder",       "pos":"noun",      "definition":"The realization that each passerby has a life as vivid and complex as your own.", "example":"A quiet sonder washed over her as she watched the busy street."},
+        {"word":"Ephemeral",    "pos":"adjective",  "definition":"Lasting for a very short time; transitory.", "example":"The morning dew is ephemeral, vanishing with the first rays of sunlight."},
+        {"word":"Petrichor",    "pos":"noun",      "definition":"The pleasant smell that frequently accompanies the first rain after a long period of warm, dry weather.", "example":"The petrichor after the monsoon brought a sense of deep calm."},
+        {"word":"Equanimity",   "pos":"noun",      "definition":"Mental calmness, composure, especially in difficult situations.", "example":"She faced the challenge with remarkable equanimity."},
+        {"word":"Perspicacious","pos":"adjective",  "definition":"Having a ready insight into things; shrewd.", "example":"His perspicacious analysis impressed the entire board."},
+        {"word":"Cogent",       "pos":"adjective",  "definition":"Clear, logical, and convincing.", "example":"She made a cogent argument that changed everyone's perspective."},
+        {"word":"Alacrity",     "pos":"noun",      "definition":"Brisk and cheerful readiness to do something.", "example":"The team accepted the new challenge with alacrity."},
+    ]
+    fb_idx = datetime.now().timetuple().tm_yday % len(fallback)
+    fb     = fallback[fb_idx]
+    return {
+        "word":       fb["word"],
+        "pos":        fb["pos"],
+        "definition": fb["definition"],
+        "example":    fb["example"],
+        "source":     "SatiCast Daily Collection",
+        "source_url": "",
+    }
+
+
 def elevenlabs_tts(text: str, voice_id: str) -> bytes | None:
     """Call ElevenLabs TTS API and return MP3 bytes."""
     if not ELEVENLABS_KEY:
@@ -287,9 +455,7 @@ Return a JSON object with EXACTLY these keys:
   "greeting": "Warm generic welcome — no personal name.",
   "weather_summary": "One vivid sentence describing today's weather.",
   {sections_json},
-  "moment_of_focus": {{"quote":"…","author":"…","explanation":"…"}},
-  "word_of_day": {{"word":"…","pos":"noun/verb/adj","definition":"…","example":"…"}},
-  "spoken_script": "Complete TTS-ready narrative in the chosen language."
+  "spoken_script": "Complete TTS-ready narrative in the chosen language. Do NOT include a quote or word-of-the-day segment — those are handled separately."
 }}
 """
 
@@ -760,6 +926,27 @@ details {{ background:var(--card-bg) !important;border-radius:16px !important;
 .hist-date {{ font-family:'Syne',sans-serif;font-size:0.9rem;font-weight:800;color:var(--text-main); }}
 .hist-meta {{ font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem; }}
 
+/* ── LIVE SOURCE BADGE ── */
+.live-source-badge {{
+    display:inline-flex;align-items:center;gap:4px;
+    background:rgba(109,40,217,0.08);
+    border:1px solid rgba(109,40,217,0.2);
+    border-radius:999px;padding:0.2rem 0.7rem;
+    font-size:0.68rem;font-weight:700;
+    color:#6D28D9;text-decoration:none;
+    letter-spacing:0.04em;margin-left:auto;
+    transition:background 0.2s;
+}}
+.live-source-badge:hover {{background:rgba(109,40,217,0.15);}}
+
+/* ── LIVE REFRESH NOTE ── */
+.focus-live-note {{
+    font-size:0.72rem;font-weight:600;
+    color:#7C3AED;opacity:0.7;
+    margin-top:0.75rem;display:block;
+    font-style:italic;
+}}
+
 /* ── SEPARATOR ── */
 .sati-sep {{
     display:flex;align-items:center;gap:12px;
@@ -906,6 +1093,10 @@ if trigger:
 
     slot.markdown(render_loader(1, dark), unsafe_allow_html=True)
 
+    # Fetch live quote + word (both cached 24h — instant on repeat loads)
+    live_quote = fetch_quote_of_day()
+    live_word  = fetch_word_of_day()
+
     # Fetch in parallel-ish (sequential but cached)
     weather_data = fetch_weather(city)
     markets_data = fetch_markets() if "Market" in chosen_topics else {}
@@ -948,6 +1139,13 @@ Tech focus: Backend systems, Java/Spring Boot, PostgreSQL, Quantum Computing, AI
 Provide exactly 5 items per news section requested.
 Do NOT use any personal name in greeting.
 Voice: {voice_choice}
+
+TODAY'S QUOTE (weave naturally into the spoken_script):
+"{live_quote.get('quote','')}" — {live_quote.get('author','')}
+
+TODAY'S WORD (mention in spoken_script as a vocabulary moment):
+Word: {live_word.get('word','')} ({live_word.get('pos','')})
+Meaning: {live_word.get('definition','')}
 """
         slot.markdown(render_loader(3, dark), unsafe_allow_html=True)
 
@@ -1215,41 +1413,66 @@ Voice: {voice_choice}
             </div>""", unsafe_allow_html=True)
 
         # ════════════════════════════════════════
-        # MOMENT OF FOCUS
+        # MOMENT OF FOCUS  — live from API
         # ════════════════════════════════════════
         sep()
-        focus = payload.get("moment_of_focus", {})
+        src_badge = ""
+        if live_quote.get("source_url"):
+            src_badge = (
+                f'<a href="{live_quote["source_url"]}" target="_blank" class="live-source-badge">'
+                f'🔗 {live_quote["source"]}</a>'
+            )
+        else:
+            src_badge = f'<span class="live-source-badge">{live_quote.get("source","")}</span>'
+
         st.markdown(f"""
         <div class="sati-section d5">
             <div class="section-header">
                 <div class="section-badge badge-focus">🧘</div>
                 <h2 class="section-title">Moment of Focus</h2>
+                {src_badge}
             </div>
             <div class="focus-card">
-                <div class="focus-quote">"{focus.get('quote','')}"</div>
-                <div class="focus-author">— {focus.get('author','')}</div>
-                <div class="focus-expl">{focus.get('explanation','')}</div>
+                <div class="focus-quote">"{live_quote.get('quote','')}"</div>
+                <div class="focus-author">— {live_quote.get('author','')}</div>
+                <div class="focus-live-note">✦ Refreshes daily with a new quote</div>
             </div>
         </div>""", unsafe_allow_html=True)
 
         # ════════════════════════════════════════
-        # WORD OF THE DAY
+        # WORD OF THE DAY  — live from API
         # ════════════════════════════════════════
         sep()
-        w = payload.get("word_of_day", {})
-        pos_html = f'<span class="word-pos">{w.get("pos","")}</span>' if w.get("pos") else ""
+        pos_html = f'<span class="word-pos">{live_word.get("pos","")}</span>' if live_word.get("pos") else ""
+        wd_src_badge = ""
+        if live_word.get("source_url"):
+            wd_src_badge = (
+                f'<a href="{live_word["source_url"]}" target="_blank" class="live-source-badge">'
+                f'🔗 {live_word["source"]}</a>'
+            )
+        else:
+            wd_src_badge = f'<span class="live-source-badge">{live_word.get("source","")}</span>'
+
+        example_html = (
+            f'<div class="word-label">In Context</div>'
+            f'<div class="word-val"><em>"{live_word["example"]}"</em></div>'
+        ) if live_word.get("example") else ""
+
         st.markdown(f"""
         <div class="sati-section d6">
             <div class="section-header">
                 <div class="section-badge badge-word">📝</div>
                 <h2 class="section-title">Daily Lexicon</h2>
+                {wd_src_badge}
             </div>
             <div class="word-card">
-                <div class="word-main">{w.get('word','')} {pos_html}</div>
+                <div class="word-main">{live_word.get('word','')} {pos_html}</div>
                 <div class="word-label">Meaning</div>
-                <div class="word-val">{w.get('definition','')}</div>
-                <div class="word-label">In Context</div>
-                <div class="word-val"><em>"{w.get('example','')}"</em></div>
+                <div class="word-val">{live_word.get('definition','')}</div>
+                {example_html}
+                <div class="word-label" style="grid-column:1/-1;margin-top:0.25rem;">
+                    <span class="focus-live-note">✦ Changes every day</span>
+                </div>
             </div>
         </div>""", unsafe_allow_html=True)
 
