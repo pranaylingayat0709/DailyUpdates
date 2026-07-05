@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import io
+import re
 import base64
 import requests
 from datetime import datetime
@@ -298,6 +299,61 @@ def fetch_word_of_day() -> dict:
     fb = fallback[datetime.now().timetuple().tm_yday % len(fallback)]
     return {"word": fb["word"], "pos": fb["pos"], "definition": fb["definition"],
             "example": fb["example"], "source": "SatiCast Daily Collection", "source_url": ""}
+
+
+def repair_truncated_json(raw: str) -> dict:
+    """
+    Best-effort repair for a JSON object that got cut off mid-string
+    (usually because max_tokens was hit). Closes the open string and
+    braces so json.loads can still recover whatever fields completed.
+    """
+    s = raw.rstrip()
+    # If it ends mid-string (odd number of unescaped quotes), close the string.
+    quote_count = len(re.findall(r'(?<!\\)"', s))
+    if quote_count % 2 == 1:
+        s += '"'
+    # Close any open arrays/objects in the right order.
+    opens = re.findall(r'[\{\[]', s)
+    closes = re.findall(r'[\}\]]', s)
+    # Walk the string tracking a stack to close things properly.
+    stack = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in '{[':
+            stack.append(ch)
+        elif ch in '}]':
+            if stack:
+                stack.pop()
+    while stack:
+        opener = stack.pop()
+        s += '}' if opener == '{' else ']'
+    try:
+        return json.loads(s)
+    except Exception:
+        return {}
+
+
+def safe_parse_llm_json(raw: str) -> dict:
+    """Parse LLM JSON output, repairing truncation if needed."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        repaired = repair_truncated_json(raw)
+        if repaired:
+            return repaired
+        raise
 
 
 def elevenlabs_tts(text: str, voice_id: str):
@@ -1115,10 +1171,31 @@ WORD to mention in spoken_script: {live_word.get('word','')} — {live_word.get(
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,
-            max_tokens=2200,   # full-length spoken script restored; news sections still skipped for speed
+            max_tokens=3200,   # generous headroom so the script never gets cut off mid-string
             response_format={"type": "json_object"}
         )
-        payload = json.loads(completion.choices[0].message.content)
+        raw_content = completion.choices[0].message.content
+
+        try:
+            payload = safe_parse_llm_json(raw_content)
+        except Exception:
+            # First attempt failed even after repair — retry once with a smaller,
+            # more tightly-scoped request so it fits comfortably within the token budget.
+            slot.markdown(render_loader(2), unsafe_allow_html=True)
+            retry_completion = nim_client.chat.completions.create(
+                model="nvidia/llama-3.3-nemotron-super-49b-v1",
+                messages=[
+                    {"role": "system", "content": build_system_prompt(
+                        lang_code, llm_news_topics, need_weather_summary,
+                        need_learning, learning_topic, news_ctx)},
+                    {"role": "user", "content": prompt + "\n\nIMPORTANT: Keep spoken_script concise (under 200 words) to guarantee the JSON completes."}
+                ],
+                temperature=0.2,
+                max_tokens=3200,
+                response_format={"type": "json_object"}
+            )
+            payload = safe_parse_llm_json(retry_completion.choices[0].message.content)
+            completion = retry_completion
 
         # ── OPTIONAL TTS ──
         audio_b64   = None
