@@ -693,68 +693,33 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
-/* ── PILL LABEL (section heading above button-pill groups) ── */
-.pill-label {
-    color:#5B21B6 !important;font-size:0.74rem;font-weight:700;
-    letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
-}
-body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
-
-/* ── BUTTON-BASED PILL GROUPS — Voice & Accent / TTS Engine.
-   st.button is the one widget proven to render text correctly (see the
-   main gradient CTA). Selection state is communicated two ways so it can
-   never be ambiguous: (1) a "✓ " prefix directly in the button's own text
-   (always visible, pure text — cannot fail), and (2) a hidden marker <div>
-   placed immediately before the SELECTED button only, targeted via the
-   adjacent-sibling combinator — this avoids depending on Streamlit's
-   internal primary/secondary "kind" attribute naming, which turned out
-   to not be reliably targetable in this Streamlit build.
-   The .pill-scope-* marker + :first-of-type scoping keeps every rule
-   below from ever touching the main "Generate Morning Brief" button. ── */
-.pill-scope-voice, .pill-scope-tts, .pill-selected-marker { height:0; margin:0; padding:0; }
-
-/* Base pill sizing — small, tight, equal, and wraps into rows via st.columns(per_row) */
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button {
-    border-radius:12px !important;
-    padding:0.4rem 0.5rem !important;
-    font-size:0.74rem !important;
-    font-weight:600 !important;
-    white-space:normal !important;
-    line-height:1.25 !important;
-    min-height:2.4rem !important;
-    max-height:3.2rem !important;
-    box-shadow:none !important;
-    transform:none !important;
-    margin:0.2rem 0 !important;
-    letter-spacing:0.02em !important;
-    text-transform:none !important;
-}
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button:hover,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button:hover {
-    transform:translateY(-1px) !important;
-}
-
-/* Default (unselected) pill = plain themed box + normal text color.
-   Applies to EVERY pill button in these two groups unconditionally. */
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button,
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button *,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button * {
-    background:var(--input-bg) !important;
-    color:var(--text-main) !important;
-    border:1.5px solid var(--input-bdr) !important;
-}
-
-/* Selected pill override — targeted via the marker placed right before it,
-   using the adjacent-sibling combinator (+). This works regardless of
-   whatever internal attribute Streamlit does or doesn't expose. */
-.pill-selected-marker + div[data-testid="stButton"] button,
-.pill-selected-marker + div[data-testid="stButton"] button * {
-    background:linear-gradient(135deg,#6D28D9,#BE185D) !important;
+/* ── SELECTBOX TEXT COLOR — dark mode only.
+   Box background/position kept exactly as before; in dark mode the
+   closed-value text, placeholder, and dropdown option list are all
+   forced to white so they're readable against the dark box. ── */
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] > div > div,
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"],
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
+body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] p {
     color:#FFFFFF !important;
-    border:none !important;
-    font-weight:800 !important;
+    -webkit-text-fill-color:#FFFFFF !important;
+}
+body:has(#dmchk:checked) div[data-baseweb="popover"] ul,
+body:has(#dmchk:checked) div[data-baseweb="menu"] {
+    background:#1E1B2E !important;
+}
+body:has(#dmchk:checked) div[data-baseweb="popover"] li,
+body:has(#dmchk:checked) div[data-baseweb="menu"] li,
+body:has(#dmchk:checked) div[data-baseweb="popover"] li *,
+body:has(#dmchk:checked) div[data-baseweb="menu"] li *,
+body:has(#dmchk:checked) div[data-baseweb="popover"] [role="option"],
+body:has(#dmchk:checked) div[data-baseweb="menu"] [role="option"],
+body:has(#dmchk:checked) div[data-baseweb="popover"] [role="option"] *,
+body:has(#dmchk:checked) div[data-baseweb="menu"] [role="option"] * {
+    color:#FFFFFF !important;
+    -webkit-text-fill-color:#FFFFFF !important;
 }
 
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
@@ -1230,72 +1195,24 @@ st.markdown(
 
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
-#
-# NOTE: st.selectbox's closed-state value text resisted every CSS override
-# attempted (BaseWeb select AND BaseWeb radio both resist external CSS).
-# The one widget type proven to render text correctly is st.button (visible
-# in the main gradient CTA below). So Voice & Accent and TTS Engine are now
-# built entirely from st.button pill groups using Streamlit's own native
-# primary/secondary button styling to indicate selection — no BaseWeb
-# component involved at all, so there's nothing left to fail to override.
 # ═══════════════════════════════════════════════════
-if "sel_voice" not in st.session_state:
-    st.session_state.sel_voice = list(VOICE_OPTIONS.keys())[0]
-if "sel_tts" not in st.session_state:
-    st.session_state.sel_tts = "gTTS (Free)"
-
-c2, cspacer = st.columns([1, 2])
+c1, c2, c3 = st.columns(3)
+with c1:
+    voice_choice = st.selectbox("🎙 Voice & Accent", options=list(VOICE_OPTIONS.keys()),
+                                index=0, key="pref_voice")
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
-
-
-def pill_grid(options, state_key, key_prefix, scope_class, per_row=3):
-    """
-    Renders `options` as equal-size button pills, wrapped into rows of
-    `per_row` (instead of one squeezed row). Selection is signalled two
-    ways: a "✓ " prefix in the button's own text (always visible — plain
-    text can't fail to render), and a hidden marker div placed immediately
-    before the selected button so CSS can give it the gradient highlight
-    via a plain adjacent-sibling selector.
-    """
-    st.markdown(f'<div class="{scope_class}"></div>', unsafe_allow_html=True)
-    for row_start in range(0, len(options), per_row):
-        row_opts = options[row_start:row_start + per_row]
-        cols = st.columns(per_row)
-        for i, opt in enumerate(row_opts):
-            with cols[i]:
-                is_sel = st.session_state[state_key] == opt
-                label = f"✓ {opt}" if is_sel else opt
-                if is_sel:
-                    st.markdown('<div class="pill-selected-marker"></div>', unsafe_allow_html=True)
-                if st.button(label, key=f"{key_prefix}_{row_start + i}",
-                            use_container_width=True):
-                    st.session_state[state_key] = opt
-                    st.rerun()
-
-
-st.markdown('<div class="pill-label">🎙 Voice &amp; Accent</div>', unsafe_allow_html=True)
-pill_grid(list(VOICE_OPTIONS.keys()), "sel_voice", "voice_btn", "pill-scope-voice", per_row=3)
-voice_choice = st.session_state.sel_voice
+with c3:
+    tts_engines = ["gTTS (Free)"]
+    if ELEVENLABS_KEY:
+        tts_engines += list(ELEVENLABS_VOICES.keys())
+    tts_choice = st.selectbox("🔊 TTS Engine", options=tts_engines, index=0, key="pref_tts")
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
 tld_code     = voice_cfg["tld"]
 lang_display = LANG_LABEL.get(lang_code, "English")
-
-tts_engines = ["gTTS (Free)"]
-if ELEVENLABS_KEY:
-    tts_engines += list(ELEVENLABS_VOICES.keys())
-
-if len(tts_engines) > 1:
-    if st.session_state.sel_tts not in tts_engines:
-        st.session_state.sel_tts = tts_engines[0]
-    st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
-    pill_grid(tts_engines, "sel_tts", "tts_btn", "pill-scope-tts", per_row=3)
-    tts_choice = st.session_state.sel_tts
-else:
-    tts_choice = tts_engines[0]
 
 c4, c5 = st.columns([2, 1])
 with c4:
