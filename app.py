@@ -638,45 +638,48 @@ div[data-testid="stSelectbox"] > div > div, div[data-testid="stMultiSelect"] > d
 }
 /* Comprehensive text-color override — targets every possible nested node BaseWeb
    might render the value/placeholder text in (value container, single-value span,
-   placeholder span, search input, and any generic BaseWeb-generated class). */
-div[data-testid="stSelectbox"] div[data-baseweb="select"],
-div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
-div[data-testid="stMultiSelect"] div[data-baseweb="select"],
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] div,
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] span,
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] input,
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] p {
-    color:var(--input-txt) !important;
-    -webkit-text-fill-color:var(--input-txt) !important;
+   placeholder span, search input, and any generic BaseWeb-generated class).
+   LIGHT MODE: hardcoded literal color (not var()) — matching exactly the pattern
+   that was proven to work for dark mode below, since the var()-based version
+   was not resolving correctly for this specific BaseWeb-rendered text node. */
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"],
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
+body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"],
+body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] div,
+body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] span,
+body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] input,
+body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] p {
+    color:#2E1065 !important;
+    -webkit-text-fill-color:#2E1065 !important;
 }
 /* Disabled selectbox (Script Language) still needs visible text, not greyed-to-invisible */
-div[data-testid="stSelectbox"] div[aria-disabled="true"],
-div[data-testid="stSelectbox"] div[aria-disabled="true"] * {
-    color:var(--input-txt) !important;
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[aria-disabled="true"],
+body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[aria-disabled="true"] * {
+    color:#2E1065 !important;
     opacity:0.9 !important;
-    -webkit-text-fill-color:var(--input-txt) !important;
+    -webkit-text-fill-color:#2E1065 !important;
 }
 /* The dropdown OPTIONS LIST is rendered in a portal appended to <body>, so it must be
-   themed globally (not scoped under stSelectbox), matched to the same theme colors. */
-div[data-baseweb="popover"] ul,
-div[data-baseweb="menu"] {
-    background:var(--input-bg) !important;
-    border:1.5px solid var(--input-bdr) !important;
+   themed globally (not scoped under stSelectbox). LIGHT MODE default: */
+body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] ul,
+body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] {
+    background:#FFFFFF !important;
+    border:1.5px solid rgba(109,40,217,0.28) !important;
     border-radius:12px !important;
 }
-div[data-baseweb="popover"] li,
-div[data-baseweb="menu"] li,
-div[data-baseweb="popover"] li *,
-div[data-baseweb="menu"] li *,
-div[data-baseweb="popover"] [role="option"],
-div[data-baseweb="menu"] [role="option"],
-div[data-baseweb="popover"] [role="option"] *,
-div[data-baseweb="menu"] [role="option"] * {
-    color:var(--input-txt) !important;
-    -webkit-text-fill-color:var(--input-txt) !important;
+body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] li,
+body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] li,
+body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] li *,
+body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] li *,
+body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] [role="option"],
+body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] [role="option"],
+body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] [role="option"] *,
+body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] [role="option"] * {
+    color:#2E1065 !important;
+    -webkit-text-fill-color:#2E1065 !important;
     background:transparent !important;
 }
 div[data-baseweb="popover"] li:hover,
