@@ -643,6 +643,28 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
+/* ── FALLBACK PILL GRID (only used if st.pills isn't available in this
+   Streamlit version — see _pill_grid_fallback). Uses the same proven
+   marker-sibling technique: a hidden marker placed right before the
+   selected button, highlighted via a plain adjacent-sibling selector. ── */
+.pill-label {
+    color:#5B21B6 !important;font-size:0.74rem;font-weight:700;
+    letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
+}
+body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
+.pill-scope-fallback, .pill-selected-marker { height:0; margin:0; padding:0; }
+.pill-scope-fallback ~ div[data-testid="stHorizontalBlock"] button {
+    border-radius:12px !important;padding:0.4rem 0.5rem !important;font-size:0.74rem !important;
+    font-weight:600 !important;white-space:normal !important;line-height:1.25 !important;
+    min-height:2.4rem !important;box-shadow:none !important;transform:none !important;
+    margin:0.2rem 0 !important;background:var(--input-bg) !important;color:var(--text-main) !important;
+    border:1.5px solid var(--input-bdr) !important;
+}
+.pill-selected-marker + div[data-testid="stButton"] button {
+    background:linear-gradient(135deg,#6D28D9,#BE185D) !important;
+    color:#FFFFFF !important;border:none !important;font-weight:800 !important;
+}
+
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
 .script-lang-badge {
     display:inline-block;
@@ -1117,36 +1139,52 @@ st.markdown(
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
 #
-# NOTE: Voice & Accent / TTS Engine use st.multiselect (constrained to a
-# single pick via max_selections=1) rather than st.radio. st.radio's
-# internal text color could not be reached by ANY method tried — plain
-# CSS at every specificity level, and a JS force-style script reaching
-# directly into the page DOM — while st.multiselect's chip text (used
-# for Topics to include) has been reliably readable in every screenshot
-# throughout. Reusing the widget that's actually proven to work.
+# NOTE: Voice & Accent / TTS Engine use st.pills — Streamlit's own
+# purpose-built single-select pill widget — which lets you switch freely
+# between options in one click (unlike st.multiselect + max_selections=1,
+# which blocks adding a new pick until the old one is manually removed).
+# If this Streamlit version predates st.pills, falls back to a custom
+# button-grid single-select that was already confirmed to render
+# correctly (checkmark + gradient highlight on the selected option).
 # ═══════════════════════════════════════════════════
-def single_select_chip(label: str, options: list, state_key: str, default: str):
-    current = st.session_state.get(state_key)
-    if not current or current[0] not in options:
-        st.session_state[state_key] = [default]
+def pick_one_pill(label: str, options: list, state_key: str, default: str):
+    if state_key not in st.session_state or st.session_state[state_key] not in options:
+        st.session_state[state_key] = default
     try:
-        st.multiselect(label, options=options, key=state_key, max_selections=1)
-    except TypeError:
-        # Older Streamlit without max_selections support — fall back to
-        # a manual pin so it still behaves as single-select.
-        st.multiselect(label, options=options, key=state_key)
-        if len(st.session_state[state_key]) > 1:
-            st.session_state[state_key] = [st.session_state[state_key][-1]]
-    if not st.session_state[state_key]:
-        st.session_state[state_key] = [default]
-    return st.session_state[state_key][0]
+        val = st.pills(label, options=options, key=state_key, selection_mode="single")
+        if val is None:
+            # st.pills allows de-selecting to nothing — snap back to current/default
+            st.session_state[state_key] = st.session_state.get(state_key) or default
+            val = st.session_state[state_key]
+        return val
+    except (AttributeError, TypeError):
+        # st.pills not available in this Streamlit version — button-grid fallback.
+        return _pill_grid_fallback(label, options, state_key, default)
+
+
+def _pill_grid_fallback(label: str, options: list, state_key: str, default: str, per_row: int = 3):
+    st.markdown(f'<div class="pill-label">{label}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pill-scope-fallback"></div>', unsafe_allow_html=True)
+    for row_start in range(0, len(options), per_row):
+        row_opts = options[row_start:row_start + per_row]
+        cols = st.columns(per_row)
+        for i, opt in enumerate(row_opts):
+            with cols[i]:
+                is_sel = st.session_state[state_key] == opt
+                btn_label = f"✓ {opt}" if is_sel else opt
+                if is_sel:
+                    st.markdown('<div class="pill-selected-marker"></div>', unsafe_allow_html=True)
+                if st.button(btn_label, key=f"{state_key}_btn_{row_start + i}", use_container_width=True):
+                    st.session_state[state_key] = opt
+                    st.rerun()
+    return st.session_state[state_key]
 
 
 voice_keys = list(VOICE_OPTIONS.keys())
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    voice_choice = single_select_chip("🎙 Voice & Accent", voice_keys, "voice_ms", voice_keys[0])
+    voice_choice = pick_one_pill("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0])
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
@@ -1154,7 +1192,7 @@ with c3:
     tts_engines = ["gTTS (Free)"]
     if ELEVENLABS_KEY:
         tts_engines += list(ELEVENLABS_VOICES.keys())
-    tts_choice = single_select_chip("🔊 TTS Engine", tts_engines, "tts_ms", tts_engines[0])
+    tts_choice = pick_one_pill("🔊 TTS Engine", tts_engines, "tts_pill", tts_engines[0])
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
