@@ -1117,32 +1117,34 @@ st.markdown(
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
 #
-# NOTE: Voice & Accent / TTS Engine now use st.multiselect pinned to a
-# single item, instead of st.selectbox. st.multiselect's chip text has
-# been reliably readable in both themes throughout every screenshot —
-# st.selectbox's closed-value text was the one thing that never was,
-# regardless of how many CSS/JS approaches were tried. Reusing a widget
-# that's already proven to work sidesteps the problem entirely.
+# NOTE: Voice & Accent / TTS Engine use st.multiselect for its chip
+# styling (reliably readable in both themes throughout every screenshot),
+# but constrained to a genuine single selection via max_selections=1 —
+# the widget itself blocks picking a second chip until the first is
+# removed, rather than allowing multiple picks and trimming after.
 # ═══════════════════════════════════════════════════
-def _pin_single(state_key: str, fallback: str):
-    """on_change callback: whichever option was just clicked becomes the
-    only selection — clicking a new option replaces the old one instead
-    of adding to it, giving single-select behaviour on a multiselect."""
-    sel = st.session_state[state_key]
-    if len(sel) > 1:
-        st.session_state[state_key] = [sel[-1]]
-    elif len(sel) == 0:
-        st.session_state[state_key] = [fallback]
+def single_select_chip(label: str, options: list, state_key: str, default: str):
+    current = st.session_state.get(state_key)
+    if not current or current[0] not in options:
+        st.session_state[state_key] = [default]
+    try:
+        st.multiselect(label, options=options, key=state_key, max_selections=1)
+    except TypeError:
+        # Older Streamlit without max_selections support — fall back to
+        # a manual pin so it still behaves as single-select.
+        st.multiselect(label, options=options, key=state_key)
+        if len(st.session_state[state_key]) > 1:
+            st.session_state[state_key] = [st.session_state[state_key][-1]]
+    if not st.session_state[state_key]:
+        st.session_state[state_key] = [default]
+    return st.session_state[state_key][0]
 
 
 voice_keys = list(VOICE_OPTIONS.keys())
-if "voice_ms" not in st.session_state:
-    st.session_state.voice_ms = [voice_keys[0]]
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    st.multiselect("🎙 Voice & Accent", options=voice_keys, key="voice_ms",
-                   on_change=_pin_single, args=("voice_ms", voice_keys[0]))
+    voice_choice = single_select_chip("🎙 Voice & Accent", voice_keys, "voice_ms", voice_keys[0])
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
@@ -1150,15 +1152,7 @@ with c3:
     tts_engines = ["gTTS (Free)"]
     if ELEVENLABS_KEY:
         tts_engines += list(ELEVENLABS_VOICES.keys())
-    if "tts_ms" not in st.session_state:
-        st.session_state.tts_ms = [tts_engines[0]]
-    if st.session_state.tts_ms[0] not in tts_engines:
-        st.session_state.tts_ms = [tts_engines[0]]
-    st.multiselect("🔊 TTS Engine", options=tts_engines, key="tts_ms",
-                   on_change=_pin_single, args=("tts_ms", tts_engines[0]))
-
-voice_choice = st.session_state.voice_ms[0] if st.session_state.voice_ms else voice_keys[0]
-tts_choice   = st.session_state.tts_ms[0] if st.session_state.tts_ms else tts_engines[0]
+    tts_choice = single_select_chip("🔊 TTS Engine", tts_engines, "tts_ms", tts_engines[0])
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
