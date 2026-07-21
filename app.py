@@ -617,6 +617,39 @@ div[data-testid="stSelectbox"] > div > div, div[data-testid="stMultiSelect"] > d
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
     border-radius:14px !important;color:var(--input-txt) !important;font-weight:500 !important;
 }
+/* Selected value text + placeholder inside the closed selectbox (BaseWeb renders these as inner spans/divs that don't inherit color) */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] * ,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] * {
+    color:var(--input-txt) !important;
+}
+/* Disabled selectbox (Script Language) still needs visible text, not greyed-to-invisible */
+div[data-testid="stSelectbox"] div[data-baseweb="select"][aria-disabled="true"] *,
+div[data-testid="stSelectbox"] div[aria-disabled="true"] * {
+    color:var(--input-txt) !important;
+    opacity:0.85 !important;
+    -webkit-text-fill-color:var(--input-txt) !important;
+}
+/* The dropdown OPTIONS LIST is rendered in a portal appended to <body>, so it must be
+   themed globally (not scoped under stSelectbox) and kept in sync with the CSS vars. */
+div[data-baseweb="popover"] ul,
+div[data-baseweb="menu"] {
+    background:var(--card-bg) !important;
+    border:1.5px solid var(--input-bdr) !important;
+    border-radius:12px !important;
+}
+div[data-baseweb="popover"] li,
+div[data-baseweb="menu"] li,
+div[data-baseweb="popover"] [role="option"],
+div[data-baseweb="menu"] [role="option"] {
+    color:var(--input-txt) !important;
+    background:transparent !important;
+}
+div[data-baseweb="popover"] li:hover,
+div[data-baseweb="menu"] li:hover,
+div[data-baseweb="popover"] [role="option"]:hover,
+div[data-baseweb="menu"] [role="option"]:hover {
+    background:rgba(109,40,217,0.12) !important;
+}
 div[data-testid="stTextInput"] input {
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
     border-radius:14px !important;color:var(--input-txt) !important;font-weight:500 !important;
