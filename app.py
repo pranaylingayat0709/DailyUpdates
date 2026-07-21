@@ -613,42 +613,61 @@ div[data-testid="stMultiSelect"] label {
 body:has(#dmchk:checked) div[data-testid="stSelectbox"] label,
 body:has(#dmchk:checked) div[data-testid="stTextInput"] label,
 body:has(#dmchk:checked) div[data-testid="stMultiSelect"] label { color:#C4B5FD !important; }
+
+/* Box background/border kept exactly as before — only fixing text color so it's
+   readable: light box (light theme) gets dark text, dark box (dark theme) gets light text. */
 div[data-testid="stSelectbox"] > div > div, div[data-testid="stMultiSelect"] > div > div {
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
-    border-radius:14px !important;color:var(--input-txt) !important;font-weight:500 !important;
+    border-radius:14px !important;font-weight:500 !important;
 }
-/* Selected value text + placeholder inside the closed selectbox (BaseWeb renders these as inner spans/divs that don't inherit color) */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] * ,
-div[data-testid="stMultiSelect"] div[data-baseweb="select"] * {
+/* Comprehensive text-color override — targets every possible nested node BaseWeb
+   might render the value/placeholder text in (value container, single-value span,
+   placeholder span, search input, and any generic BaseWeb-generated class). */
+div[data-testid="stSelectbox"] div[data-baseweb="select"],
+div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"],
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] div,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] span,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] input,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] p {
     color:var(--input-txt) !important;
+    -webkit-text-fill-color:var(--input-txt) !important;
 }
 /* Disabled selectbox (Script Language) still needs visible text, not greyed-to-invisible */
-div[data-testid="stSelectbox"] div[data-baseweb="select"][aria-disabled="true"] *,
+div[data-testid="stSelectbox"] div[aria-disabled="true"],
 div[data-testid="stSelectbox"] div[aria-disabled="true"] * {
     color:var(--input-txt) !important;
-    opacity:0.85 !important;
+    opacity:0.9 !important;
     -webkit-text-fill-color:var(--input-txt) !important;
 }
 /* The dropdown OPTIONS LIST is rendered in a portal appended to <body>, so it must be
-   themed globally (not scoped under stSelectbox) and kept in sync with the CSS vars. */
+   themed globally (not scoped under stSelectbox), matched to the same theme colors. */
 div[data-baseweb="popover"] ul,
 div[data-baseweb="menu"] {
-    background:var(--card-bg) !important;
+    background:var(--input-bg) !important;
     border:1.5px solid var(--input-bdr) !important;
     border-radius:12px !important;
 }
 div[data-baseweb="popover"] li,
 div[data-baseweb="menu"] li,
+div[data-baseweb="popover"] li *,
+div[data-baseweb="menu"] li *,
 div[data-baseweb="popover"] [role="option"],
-div[data-baseweb="menu"] [role="option"] {
+div[data-baseweb="menu"] [role="option"],
+div[data-baseweb="popover"] [role="option"] *,
+div[data-baseweb="menu"] [role="option"] * {
     color:var(--input-txt) !important;
+    -webkit-text-fill-color:var(--input-txt) !important;
     background:transparent !important;
 }
 div[data-baseweb="popover"] li:hover,
 div[data-baseweb="menu"] li:hover,
 div[data-baseweb="popover"] [role="option"]:hover,
 div[data-baseweb="menu"] [role="option"]:hover {
-    background:rgba(109,40,217,0.12) !important;
+    background:rgba(128,128,128,0.18) !important;
 }
 div[data-testid="stTextInput"] input {
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
