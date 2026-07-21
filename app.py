@@ -693,6 +693,63 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
+/* ── PILL LABEL (section heading above radio groups) ── */
+.pill-label {
+    color:#5B21B6 !important;font-size:0.74rem;font-weight:700;
+    letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
+}
+body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
+
+/* ── RADIO AS PILLS — proven-readable widget replacing the unreadable
+   st.selectbox closed-state text for Voice & Accent / TTS Engine. ── */
+div[data-testid="stRadio"] > label { display:none; } /* hide Streamlit's own (redundant) label */
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+    display:flex; flex-wrap:wrap; gap:10px; margin-bottom:1rem;
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"] {
+    background:var(--input-bg) !important;
+    border:1.5px solid var(--input-bdr) !important;
+    border-radius:999px !important;
+    padding:0.5rem 1.1rem !important;
+    margin:0 !important;
+    cursor:pointer;
+    transition:all 0.2s ease;
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"]:hover {
+    border-color:#6D28D9 !important;
+    transform:translateY(-1px);
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"] div:first-child {
+    display:none; /* hide the default radio dot — the pill background communicates selection */
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"] p {
+    color:var(--text-main) !important;
+    font-size:0.88rem !important;
+    font-weight:600 !important;
+    margin:0 !important;
+}
+/* Selected pill gets the brand gradient */
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+    background:linear-gradient(135deg,#6D28D9,#BE185D) !important;
+    border-color:transparent !important;
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p {
+    color:#FFFFFF !important;
+}
+
+/* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
+.script-lang-badge {
+    display:inline-block;
+    background:var(--card-bg);
+    border:1.5px solid var(--card-bdr);
+    border-radius:999px;
+    padding:0.55rem 1.2rem;
+    font-size:0.85rem;
+    color:var(--text-sub);
+    margin:0.3rem 0 1.2rem;
+}
+.script-lang-badge strong { color:var(--text-main); }
+
 .stButton > button {
     display:block !important;margin:1.8rem auto 0 !important;
     background:linear-gradient(135deg,#6D28D9 0%,#BE185D 100%) !important;
@@ -1153,35 +1210,52 @@ st.markdown(
 
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
+#
+# NOTE: st.selectbox's closed-state value text resisted every CSS override
+# attempted (while st.radio / st.toggle labels render correctly, and
+# st.multiselect chips render correctly). So Voice & Accent and TTS Engine
+# now use st.radio instead — a widget we know is reliably readable in both
+# themes — and Script Language (purely informational/disabled) is now a
+# plain themed badge instead of a disabled dropdown.
 # ═══════════════════════════════════════════════════
-c1, c2, c3 = st.columns(3)
-with c1:
-    voice_choice = st.selectbox("🎙 Voice & Accent", options=list(VOICE_OPTIONS.keys()),
-                                index=0, key="pref_voice")
+c2, cspacer = st.columns([1, 2])
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
-with c3:
-    tts_engines = ["gTTS (Free)"]
-    if ELEVENLABS_KEY:
-        tts_engines += list(ELEVENLABS_VOICES.keys())
-    tts_choice = st.selectbox("🔊 TTS Engine", options=tts_engines, index=0, key="pref_tts")
+
+st.markdown('<div class="pill-label">🎙 Voice &amp; Accent</div>', unsafe_allow_html=True)
+voice_choice = st.radio("Voice & Accent", options=list(VOICE_OPTIONS.keys()),
+                        index=0, key="pref_voice", horizontal=True, label_visibility="collapsed")
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
 tld_code     = voice_cfg["tld"]
 lang_display = LANG_LABEL.get(lang_code, "English")
 
-c4, c5, c6 = st.columns(3)
+tts_engines = ["gTTS (Free)"]
+if ELEVENLABS_KEY:
+    tts_engines += list(ELEVENLABS_VOICES.keys())
+
+if len(tts_engines) > 1:
+    st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
+    tts_choice = st.radio("TTS Engine", options=tts_engines, index=0, key="pref_tts",
+                          horizontal=True, label_visibility="collapsed")
+else:
+    tts_choice = tts_engines[0]
+
+c4, c5 = st.columns([2, 1])
 with c4:
     chosen_topics = st.multiselect("📌 Topics to include", options=list(TOPIC_ICONS.keys()),
                                    default=["National", "Global", "Tech"], key="pref_topics")
 with c5:
     generate_audio = st.toggle("🎧 Generate Audio", value=True, key="pref_audio",
                                help="Turn off to skip voice generation — text brief appears much faster.")
-with c6:
-    st.selectbox("📢 Script Language", options=[lang_display], disabled=True,
-                 help="Auto-follows your voice selection")
+
+st.markdown(
+    f'<div class="script-lang-badge">📢 Script Language auto-follows your voice: '
+    f'<strong>{lang_display}</strong></div>',
+    unsafe_allow_html=True
+)
 
 # ═══════════════════════════════════════════════════
 # GENERATE
