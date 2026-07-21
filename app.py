@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import io
 import re
@@ -643,6 +644,20 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
+/* ── PILL LABEL (heading above the Voice & Accent / TTS Engine radio groups) ── */
+.pill-label {
+    color:#5B21B6 !important;font-size:0.74rem;font-weight:700;
+    letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
+}
+body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
+
+/* Layout only (wrapping, spacing) — text color and pill background/selected-state
+   are applied via JS (see the force-style script below), since CSS reliably
+   failed to reach this widget's internal text in one theme or the other. */
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+    display:flex; flex-wrap:wrap; gap:8px; margin-bottom:0.5rem;
+}
+
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
 .script-lang-badge {
     display:inline-block;
@@ -874,6 +889,89 @@ st.markdown(
     '<div class="orb orb3"></div><div class="orb orb4"></div></div>',
     unsafe_allow_html=True
 )
+
+# ═══════════════════════════════════════════════════
+# JS FORCE-STYLE FOR THE VOICE & ACCENT / TTS ENGINE RADIO PILLS
+#
+# CSS alone reliably failed to reach this widget's internal text color in
+# one theme or the other (a source-order/cascade tie with Streamlit's own
+# injected styling). This reaches into the actual page DOM (via
+# window.parent, since components.html renders in an iframe) and sets
+# each radio option's pill background, border, and text color as inline
+# styles via element.style.setProperty(prop, val, "important") — the
+# highest-priority position in the CSS cascade, guaranteed to beat any
+# stylesheet rule regardless of specificity or injection order. It also
+# hides the native radio dot and applies the gradient highlight to the
+# selected option. Polls on an interval so it re-applies whenever the
+# dark/light toggle flips or a selection changes.
+# ═══════════════════════════════════════════════════
+components.html("""
+<script>
+(function() {
+    function styleGroup(group, isDark) {
+        var textColor = isDark ? '#F5F3FF' : '#1E1535';
+        var idleBg    = isDark ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.85)';
+        var idleBdr   = isDark ? '1.5px solid rgba(139,92,246,0.35)' : '1.5px solid rgba(109,40,217,0.28)';
+        var options = group.querySelectorAll('label[data-baseweb="radio"]');
+        options.forEach(function(opt) {
+            var input = opt.querySelector('input[type="radio"]');
+            var isChecked = !!(input && input.checked);
+
+            // Hide the native radio dot (first child div)
+            var dot = opt.querySelector('div');
+            if (dot) dot.style.setProperty('display', 'none', 'important');
+
+            // Pill shape + spacing
+            opt.style.setProperty('border-radius', '999px', 'important');
+            opt.style.setProperty('padding', '0.5rem 1rem', 'important');
+            opt.style.setProperty('margin', '3px', 'important');
+            opt.style.setProperty('cursor', 'pointer', 'important');
+            opt.style.setProperty('transition', 'transform 0.15s ease', 'important');
+
+            var bg, bdr, txt;
+            if (isChecked) {
+                bg = 'linear-gradient(135deg,#6D28D9,#BE185D)';
+                bdr = 'none';
+                txt = '#FFFFFF';
+            } else {
+                bg = idleBg;
+                bdr = idleBdr;
+                txt = textColor;
+            }
+            opt.style.setProperty('background', bg, 'important');
+            opt.style.setProperty('border', bdr, 'important');
+            opt.style.setProperty('color', txt, 'important');
+
+            var nodes = opt.querySelectorAll('*');
+            nodes.forEach(function(n) {
+                n.style.setProperty('color', txt, 'important');
+                n.style.setProperty('-webkit-text-fill-color', txt, 'important');
+            });
+        });
+    }
+
+    function applyStyles() {
+        try {
+            var doc = window.parent.document;
+            var dm = doc.getElementById('dmchk');
+            var isDark = !!(dm && dm.checked);
+
+            var groups = doc.querySelectorAll('div[data-testid="stRadio"]');
+            groups.forEach(function(group) {
+                var lbl = group.querySelector('label');
+                var text = lbl ? lbl.textContent : '';
+                if (text.indexOf('Voice & Accent') !== -1 || text.indexOf('TTS Engine') !== -1) {
+                    styleGroup(group, isDark);
+                }
+            });
+        } catch (e) { /* not yet mounted — next tick retries */ }
+    }
+
+    applyStyles();
+    setInterval(applyStyles, 300);
+})();
+</script>
+""", height=0)
 
 
 def sep():
@@ -1117,34 +1215,20 @@ st.markdown(
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
 #
-# NOTE: Voice & Accent / TTS Engine use st.multiselect for its chip
-# styling (reliably readable in both themes throughout every screenshot),
-# but constrained to a genuine single selection via max_selections=1 —
-# the widget itself blocks picking a second chip until the first is
-# removed, rather than allowing multiple picks and trimming after.
+# NOTE: Voice & Accent / TTS Engine use st.radio for genuine single-select
+# semantics. Text color/pill styling is applied via a small JS snippet
+# (see below, after the masthead) rather than CSS — CSS reliably failed
+# to reach this widget's internal text in one theme or the other, while
+# a JS force-style approach (element.style.setProperty with "important")
+# always wins regardless of any cascade/specificity quirk.
 # ═══════════════════════════════════════════════════
-def single_select_chip(label: str, options: list, state_key: str, default: str):
-    current = st.session_state.get(state_key)
-    if not current or current[0] not in options:
-        st.session_state[state_key] = [default]
-    try:
-        st.multiselect(label, options=options, key=state_key, max_selections=1)
-    except TypeError:
-        # Older Streamlit without max_selections support — fall back to
-        # a manual pin so it still behaves as single-select.
-        st.multiselect(label, options=options, key=state_key)
-        if len(st.session_state[state_key]) > 1:
-            st.session_state[state_key] = [st.session_state[state_key][-1]]
-    if not st.session_state[state_key]:
-        st.session_state[state_key] = [default]
-    return st.session_state[state_key][0]
-
-
 voice_keys = list(VOICE_OPTIONS.keys())
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    voice_choice = single_select_chip("🎙 Voice & Accent", voice_keys, "voice_ms", voice_keys[0])
+    st.markdown('<div class="pill-label">🎙 Voice &amp; Accent</div>', unsafe_allow_html=True)
+    voice_choice = st.radio("Voice & Accent", options=voice_keys, key="pref_voice",
+                            horizontal=True, label_visibility="collapsed")
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
@@ -1152,7 +1236,9 @@ with c3:
     tts_engines = ["gTTS (Free)"]
     if ELEVENLABS_KEY:
         tts_engines += list(ELEVENLABS_VOICES.keys())
-    tts_choice = single_select_chip("🔊 TTS Engine", tts_engines, "tts_ms", tts_engines[0])
+    st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
+    tts_choice = st.radio("TTS Engine", options=tts_engines, key="pref_tts",
+                          horizontal=True, label_visibility="collapsed")
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
