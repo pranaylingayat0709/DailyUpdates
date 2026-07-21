@@ -423,38 +423,54 @@ Return a JSON object with EXACTLY these keys:
 """
 
 
-def build_visual_prompt(llm_news_topics, need_weather_summary, need_learning, learning_topic):
+NEWS_KEY_MAP = {
+    "National": "india_news",
+    "Global":   "global_news",
+    "Tech":     "tech_news",
+    "Sports":   "sports_flash",
+}
+
+def build_news_topic_prompt(topic_name: str) -> str:
     """
-    Everything the audio does NOT need: on-screen-only fields.
-    Runs concurrently with build_script_prompt's call — and is skipped
-    entirely (no API call at all) if nothing here is actually needed.
+    Dedicated prompt for exactly ONE news topic. Splitting these into
+    separate calls (instead of one shared call for all topics) means
+    each one gets a full token budget for all 5 items — no more risk
+    of the array getting truncated to 1 item because a shared budget
+    ran out partway through.
     """
+    key = NEWS_KEY_MAP[topic_name]
+    return f"""
+You generate realistic current news headlines for a daily briefing app.
+Generate EXACTLY 5 plausible, distinct current news items for the "{topic_name}" category,
+each with a realistic and varied source name (e.g. Reuters, BBC, The Hindu, TechCrunch, ESPN — pick ones fitting the category).
+
+Return ONLY valid JSON — no markdown fences, no preamble. Return EXACTLY this key:
+{{
+  "{key}": [
+    {{"headline":"…","detail":"…","source":"…"}},
+    {{"headline":"…","detail":"…","source":"…"}},
+    {{"headline":"…","detail":"…","source":"…"}},
+    {{"headline":"…","detail":"…","source":"…"}},
+    {{"headline":"…","detail":"…","source":"…"}}
+  ]
+}}
+"""
+
+
+def build_misc_prompt(need_weather_summary: bool, need_learning: bool, learning_topic: str) -> str:
+    """Small prompt for the two lightweight on-screen fields that aren't news arrays."""
     keys = []
     if need_weather_summary:
         keys.append('"weather_summary": "One vivid sentence describing today\'s weather."')
-    topic_key_map = {
-        "National": '"india_news": [{"headline":"…","detail":"…","source":"…"}]',
-        "Global":   '"global_news": [{"headline":"…","detail":"…","source":"…"}]',
-        "Tech":     '"tech_news": [{"headline":"…","detail":"…","source":"…"}]',
-        "Sports":   '"sports_flash": [{"headline":"…","detail":"…","source":"…"}]',
-    }
-    for t in llm_news_topics:
-        keys.append(topic_key_map[t])
     if need_learning:
         keys.append('"learning_byte": {"topic":"…","insight":"…","tip":"…"}')
     keys_json = ",\n  ".join(keys)
-
     learning_block = f'\nThe learning_byte MUST be about exactly this topic: "{learning_topic}"' if need_learning else ""
-    gen_news_note = (
-        f"\nFor these news sections, generate exactly 5 plausible current items each with a realistic source name: {', '.join(llm_news_topics)}."
-        if llm_news_topics else ""
-    )
 
     return f"""
-You generate on-screen supplementary data for SatiCast, a daily briefing app.
+You generate small on-screen supplementary fields for SatiCast, a daily briefing app.
 Generate ONLY the requested fields as a valid JSON object. Be fast and concise.
 {learning_block}
-{gen_news_note}
 
 Return ONLY valid JSON — no markdown fences, no preamble.
 
@@ -471,8 +487,8 @@ Return a JSON object with EXACTLY these keys:
 LOADER_STAGES = [
     ("🌸", "Waking up your morning brief…",   "Initialising SatiCast"),
     ("📡", "Fetching live data in parallel…", "Weather · News · Markets · Quote · Word"),
-    ("🧠", "Writing script &amp; visuals in parallel…", "Two AI calls running concurrently"),
-    ("🎵", "Generating voice audio…",         "Overlapped with any remaining visual data"),
+    ("🧠", "Writing script, news &amp; visuals in parallel…", "Multiple AI calls running concurrently"),
+    ("🎵", "Generating voice audio…",         "Overlapped with any remaining calls"),
     ("✨", "Polishing your digest…",          "Final quality pass"),
 ]
 
@@ -1236,7 +1252,7 @@ if trigger:
         word_line  = f'WORD to mention in spoken_script: {live_word.get("word","")} — {live_word.get("definition","")}'
         user_ctx   = f"Date: {current_date}\nCity: {city}\nTopics: {', '.join(chosen_topics)}"
 
-        needs_visual_call = need_weather_summary or bool(llm_news_topics) or need_learning
+        needs_misc_call = need_weather_summary or need_learning
 
         def call_script(user_message: str, max_words_hint: str = ""):
             sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line)
@@ -1251,26 +1267,55 @@ if trigger:
             )
             return safe_parse_llm_json(c.choices[0].message.content)
 
-        def call_visual(user_message: str):
-            sys_prompt = build_visual_prompt(llm_news_topics, need_weather_summary,
-                                             need_learning, learning_topic)
+        def call_news_topic(topic_name: str) -> dict:
+            """
+            Dedicated call for ONE news topic — full token budget for 5 items,
+            so it can never get truncated to 1 item by a shared budget.
+            Retries once (smaller ask) if the first attempt is malformed.
+            """
+            sys_prompt = build_news_topic_prompt(topic_name)
+            msg = f"{user_ctx}\nGenerate the 5 {topic_name} news items now."
+            c = nim_client.chat.completions.create(
+                model="nvidia/llama-3.3-nemotron-super-49b-v1",
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": msg}],
+                temperature=0.4,
+                max_tokens=1200,   # generous per-topic budget — only 5 short items needed
+                response_format={"type": "json_object"}
+            )
+            try:
+                return safe_parse_llm_json(c.choices[0].message.content)
+            except Exception:
+                # Retry once, even more tightly scoped
+                c2 = nim_client.chat.completions.create(
+                    model="nvidia/llama-3.3-nemotron-super-49b-v1",
+                    messages=[{"role": "system", "content": sys_prompt},
+                              {"role": "user", "content": msg + " Keep each 'detail' under 15 words."}],
+                    temperature=0.3,
+                    max_tokens=1200,
+                    response_format={"type": "json_object"}
+                )
+                return safe_parse_llm_json(c2.choices[0].message.content)
+
+        def call_misc(user_message: str) -> dict:
+            sys_prompt = build_misc_prompt(need_weather_summary, need_learning, learning_topic)
             c = nim_client.chat.completions.create(
                 model="nvidia/llama-3.3-nemotron-super-49b-v1",
                 messages=[{"role": "system", "content": sys_prompt},
                           {"role": "user", "content": user_message}],
                 temperature=0.3,
-                max_tokens=1800,
+                max_tokens=900,
                 response_format={"type": "json_object"}
             )
             return safe_parse_llm_json(c.choices[0].message.content)
 
         slot.markdown(render_loader(2), unsafe_allow_html=True)
 
-        # ── LAUNCH SCRIPT + VISUAL CALLS IN PARALLEL ──
-        # (visual call only fires if there's actually something for it to generate)
-        with ThreadPoolExecutor(max_workers=3) as ex:
+        # ── LAUNCH SCRIPT + ONE CALL PER MISSING NEWS TOPIC + MISC — ALL IN PARALLEL ──
+        with ThreadPoolExecutor(max_workers=max(3, len(llm_news_topics) + 2)) as ex:
             fut_script = ex.submit(call_script, user_ctx)
-            fut_visual = ex.submit(call_visual, user_ctx) if needs_visual_call else None
+            fut_news   = {t: ex.submit(call_news_topic, t) for t in llm_news_topics}
+            fut_misc   = ex.submit(call_misc, user_ctx) if needs_misc_call else None
 
             # Script result feeds TTS — grab it first, with a repair-retry inline.
             try:
@@ -1283,7 +1328,7 @@ if trigger:
             tts_text = script_payload.get("spoken_script", "")
 
             # ── TTS starts the instant the script is ready — overlapping
-            #    with the visual call if it's still in flight. ──
+            #    with the news/misc calls if they're still in flight. ──
             tts_future = None
             if generate_audio and tts_text:
                 slot.markdown(render_loader(3), unsafe_allow_html=True)
@@ -1302,14 +1347,20 @@ if trigger:
 
                 tts_future = ex.submit(run_tts)
 
-            # Collect visual result (if any) — this has likely already
-            # finished by now since it ran concurrently with the script call.
+            # Collect each topic's news result — these have likely already
+            # finished by now since they ran concurrently with the script call.
             visual_payload = {}
-            if fut_visual is not None:
+            for topic_name, fut in fut_news.items():
                 try:
-                    visual_payload = fut_visual.result(timeout=45)
+                    visual_payload.update(fut.result(timeout=45))
                 except Exception:
-                    visual_payload = {}
+                    pass  # that topic simply won't render — others are unaffected
+
+            if fut_misc is not None:
+                try:
+                    visual_payload.update(fut_misc.result(timeout=45))
+                except Exception:
+                    pass
 
             audio_bytes = tts_future.result() if tts_future is not None else None
 
