@@ -702,54 +702,59 @@ body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
 
 /* ── BUTTON-BASED PILL GROUPS — Voice & Accent / TTS Engine.
    st.button is the one widget proven to render text correctly (see the
-   main gradient CTA), so selection here uses Streamlit's own native
-   primary/secondary button styling instead of any BaseWeb select/radio.
-   The marker div + general-sibling selector scopes these rules to ONLY
-   the row of columns immediately following each marker, leaving the
-   main "Generate Morning Brief" button completely untouched. ── */
-.pill-scope-voice, .pill-scope-tts { height:0; margin:0; }
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button {
-    border-radius:999px !important;
-    padding:0.5rem 0.6rem !important;
-    font-size:0.78rem !important;
+   main gradient CTA). Selection state is communicated two ways so it can
+   never be ambiguous: (1) a "✓ " prefix directly in the button's own text
+   (always visible, pure text — cannot fail), and (2) a hidden marker <div>
+   placed immediately before the SELECTED button only, targeted via the
+   adjacent-sibling combinator — this avoids depending on Streamlit's
+   internal primary/secondary "kind" attribute naming, which turned out
+   to not be reliably targetable in this Streamlit build.
+   The .pill-scope-* marker + :first-of-type scoping keeps every rule
+   below from ever touching the main "Generate Morning Brief" button. ── */
+.pill-scope-voice, .pill-scope-tts, .pill-selected-marker { height:0; margin:0; padding:0; }
+
+/* Base pill sizing — small, tight, equal, and wraps into rows via st.columns(per_row) */
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button {
+    border-radius:12px !important;
+    padding:0.4rem 0.5rem !important;
+    font-size:0.74rem !important;
     font-weight:600 !important;
     white-space:normal !important;
-    line-height:1.3 !important;
-    min-height:2.6rem !important;
+    line-height:1.25 !important;
+    min-height:2.4rem !important;
+    max-height:3.2rem !important;
     box-shadow:none !important;
     transform:none !important;
     margin:0.2rem 0 !important;
+    letter-spacing:0.02em !important;
+    text-transform:none !important;
 }
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover {
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button:hover,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button:hover {
     transform:translateY(-1px) !important;
 }
-/* Unselected pill = plain themed box + normal text color */
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"],
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] {
+
+/* Default (unselected) pill = plain themed box + normal text color.
+   Applies to EVERY pill button in these two groups unconditionally. */
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button,
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"] button *,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"] button * {
     background:var(--input-bg) !important;
     color:var(--text-main) !important;
     border:1.5px solid var(--input-bdr) !important;
 }
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] p,
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] div,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] p,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] div {
-    color:var(--text-main) !important;
-}
-/* Selected pill = brand gradient + white text (Streamlit's "primary" button type) */
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"],
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] {
+
+/* Selected pill override — targeted via the marker placed right before it,
+   using the adjacent-sibling combinator (+). This works regardless of
+   whatever internal attribute Streamlit does or doesn't expose. */
+.pill-selected-marker + div[data-testid="stButton"] button,
+.pill-selected-marker + div[data-testid="stButton"] button * {
     background:linear-gradient(135deg,#6D28D9,#BE185D) !important;
     color:#FFFFFF !important;
     border:none !important;
-}
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] p,
-.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] div,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] p,
-.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] div {
-    color:#FFFFFF !important;
+    font-weight:800 !important;
 }
 
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
@@ -1244,18 +1249,34 @@ with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
 
+
+def pill_grid(options, state_key, key_prefix, scope_class, per_row=3):
+    """
+    Renders `options` as equal-size button pills, wrapped into rows of
+    `per_row` (instead of one squeezed row). Selection is signalled two
+    ways: a "✓ " prefix in the button's own text (always visible — plain
+    text can't fail to render), and a hidden marker div placed immediately
+    before the selected button so CSS can give it the gradient highlight
+    via a plain adjacent-sibling selector.
+    """
+    st.markdown(f'<div class="{scope_class}"></div>', unsafe_allow_html=True)
+    for row_start in range(0, len(options), per_row):
+        row_opts = options[row_start:row_start + per_row]
+        cols = st.columns(per_row)
+        for i, opt in enumerate(row_opts):
+            with cols[i]:
+                is_sel = st.session_state[state_key] == opt
+                label = f"✓ {opt}" if is_sel else opt
+                if is_sel:
+                    st.markdown('<div class="pill-selected-marker"></div>', unsafe_allow_html=True)
+                if st.button(label, key=f"{key_prefix}_{row_start + i}",
+                            use_container_width=True):
+                    st.session_state[state_key] = opt
+                    st.rerun()
+
+
 st.markdown('<div class="pill-label">🎙 Voice &amp; Accent</div>', unsafe_allow_html=True)
-st.markdown('<div class="pill-scope-voice"></div>', unsafe_allow_html=True)
-voice_keys = list(VOICE_OPTIONS.keys())
-voice_cols = st.columns(len(voice_keys))
-for i, opt in enumerate(voice_keys):
-    with voice_cols[i]:
-        is_sel = st.session_state.sel_voice == opt
-        if st.button(opt, key=f"voice_btn_{i}",
-                    type="primary" if is_sel else "secondary",
-                    use_container_width=True):
-            st.session_state.sel_voice = opt
-            st.rerun()
+pill_grid(list(VOICE_OPTIONS.keys()), "sel_voice", "voice_btn", "pill-scope-voice", per_row=3)
 voice_choice = st.session_state.sel_voice
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
@@ -1268,19 +1289,10 @@ if ELEVENLABS_KEY:
     tts_engines += list(ELEVENLABS_VOICES.keys())
 
 if len(tts_engines) > 1:
-    st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
-    st.markdown('<div class="pill-scope-tts"></div>', unsafe_allow_html=True)
     if st.session_state.sel_tts not in tts_engines:
         st.session_state.sel_tts = tts_engines[0]
-    tts_cols = st.columns(len(tts_engines))
-    for i, opt in enumerate(tts_engines):
-        with tts_cols[i]:
-            is_sel = st.session_state.sel_tts == opt
-            if st.button(opt, key=f"tts_btn_{i}",
-                        type="primary" if is_sel else "secondary",
-                        use_container_width=True):
-                st.session_state.sel_tts = opt
-                st.rerun()
+    st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
+    pill_grid(tts_engines, "sel_tts", "tts_btn", "pill-scope-tts", per_row=3)
     tts_choice = st.session_state.sel_tts
 else:
     tts_choice = tts_engines[0]
