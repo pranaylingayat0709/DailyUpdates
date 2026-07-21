@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import json
 import io
 import re
@@ -622,72 +621,19 @@ body:has(#dmchk:checked) .sati-meaning { color:#C4B5FD; }
 @keyframes wave { 0%,100%{transform:scaleY(0.35);opacity:0.45} 50%{transform:scaleY(1.0);opacity:1.0} }
 
 /* ── CONTROLS ── */
-div[data-testid="stSelectbox"] label, div[data-testid="stTextInput"] label,
-div[data-testid="stMultiSelect"] label {
+div[data-testid="stMultiSelect"] label, div[data-testid="stTextInput"] label {
     color:#5B21B6 !important;font-size:0.74rem !important;
     font-weight:700 !important;letter-spacing:0.08em !important;text-transform:uppercase !important;
 }
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] label,
-body:has(#dmchk:checked) div[data-testid="stTextInput"] label,
-body:has(#dmchk:checked) div[data-testid="stMultiSelect"] label { color:#C4B5FD !important; }
+body:has(#dmchk:checked) div[data-testid="stMultiSelect"] label,
+body:has(#dmchk:checked) div[data-testid="stTextInput"] label { color:#C4B5FD !important; }
 
-/* Box background/border kept exactly as before — only fixing text color so it's
-   readable: light box (light theme) gets dark text, dark box (dark theme) gets light text. */
-div[data-testid="stSelectbox"] > div > div, div[data-testid="stMultiSelect"] > div > div {
+/* Multiselect box (used for Voice & Accent, TTS Engine, and Topics to include) —
+   chip text has been reliably readable in both themes throughout, so this is
+   the widget of choice instead of st.selectbox. */
+div[data-testid="stMultiSelect"] > div > div {
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
     border-radius:14px !important;font-weight:500 !important;
-}
-/* Comprehensive text-color override — targets every possible nested node BaseWeb
-   might render the value/placeholder text in (value container, single-value span,
-   placeholder span, search input, and any generic BaseWeb-generated class).
-   LIGHT MODE: hardcoded literal color (not var()) — matching exactly the pattern
-   that was proven to work for dark mode below, since the var()-based version
-   was not resolving correctly for this specific BaseWeb-rendered text node. */
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"],
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
-body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"],
-body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] div,
-body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] span,
-body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] input,
-body:not(:has(#dmchk:checked)) div[data-testid="stMultiSelect"] div[data-baseweb="select"] p {
-    color:#2E1065 !important;
-    -webkit-text-fill-color:#2E1065 !important;
-}
-/* Disabled selectbox (Script Language) still needs visible text, not greyed-to-invisible */
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[aria-disabled="true"],
-body:not(:has(#dmchk:checked)) div[data-testid="stSelectbox"] div[aria-disabled="true"] * {
-    color:#2E1065 !important;
-    opacity:0.9 !important;
-    -webkit-text-fill-color:#2E1065 !important;
-}
-/* The dropdown OPTIONS LIST is rendered in a portal appended to <body>, so it must be
-   themed globally (not scoped under stSelectbox). LIGHT MODE default: */
-body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] ul,
-body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] {
-    background:#FFFFFF !important;
-    border:1.5px solid rgba(109,40,217,0.28) !important;
-    border-radius:12px !important;
-}
-body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] li,
-body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] li,
-body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] li *,
-body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] li *,
-body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] [role="option"],
-body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] [role="option"],
-body:not(:has(#dmchk:checked)) div[data-baseweb="popover"] [role="option"] *,
-body:not(:has(#dmchk:checked)) div[data-baseweb="menu"] [role="option"] * {
-    color:#2E1065 !important;
-    -webkit-text-fill-color:#2E1065 !important;
-    background:transparent !important;
-}
-div[data-baseweb="popover"] li:hover,
-div[data-baseweb="menu"] li:hover,
-div[data-baseweb="popover"] [role="option"]:hover,
-div[data-baseweb="menu"] [role="option"]:hover {
-    background:rgba(128,128,128,0.18) !important;
 }
 div[data-testid="stTextInput"] input {
     background:var(--input-bg) !important;border:1.5px solid var(--input-bdr) !important;
@@ -696,35 +642,6 @@ div[data-testid="stTextInput"] input {
 }
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
-
-/* ── SELECTBOX TEXT COLOR — dark mode only.
-   Box background/position kept exactly as before; in dark mode the
-   closed-value text, placeholder, and dropdown option list are all
-   forced to white so they're readable against the dark box. ── */
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] > div > div,
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"],
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
-body:has(#dmchk:checked) div[data-testid="stSelectbox"] div[data-baseweb="select"] p {
-    color:#FFFFFF !important;
-    -webkit-text-fill-color:#FFFFFF !important;
-}
-body:has(#dmchk:checked) div[data-baseweb="popover"] ul,
-body:has(#dmchk:checked) div[data-baseweb="menu"] {
-    background:#1E1B2E !important;
-}
-body:has(#dmchk:checked) div[data-baseweb="popover"] li,
-body:has(#dmchk:checked) div[data-baseweb="menu"] li,
-body:has(#dmchk:checked) div[data-baseweb="popover"] li *,
-body:has(#dmchk:checked) div[data-baseweb="menu"] li *,
-body:has(#dmchk:checked) div[data-baseweb="popover"] [role="option"],
-body:has(#dmchk:checked) div[data-baseweb="menu"] [role="option"],
-body:has(#dmchk:checked) div[data-baseweb="popover"] [role="option"] *,
-body:has(#dmchk:checked) div[data-baseweb="menu"] [role="option"] * {
-    color:#FFFFFF !important;
-    -webkit-text-fill-color:#FFFFFF !important;
-}
 
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
 .script-lang-badge {
@@ -957,57 +874,6 @@ st.markdown(
     '<div class="orb orb3"></div><div class="orb orb4"></div></div>',
     unsafe_allow_html=True
 )
-
-# ═══════════════════════════════════════════════════
-# JS FORCE-COLOR FOR SELECTBOX TEXT
-#
-# Pure CSS kept losing this specific fight — the light-mode rule reliably
-# failed while the dark-mode rule reliably worked, which points to a
-# cascade/source-order tie that Streamlit's own internal styling wins.
-# Rather than keep guessing at selectors, this reaches into the actual
-# page DOM (via window.parent, since components.html renders in an
-# iframe) and sets each selectbox's text color as an inline style via
-# element.style.setProperty(prop, val, "important") — which has the
-# highest possible priority in the CSS cascade, guaranteed to beat any
-# stylesheet rule regardless of specificity or injection order. It polls
-# on an interval so it also catches the dropdown's option list the
-# moment it opens, and re-applies whenever the dark/light toggle flips.
-# ═══════════════════════════════════════════════════
-components.html("""
-<script>
-(function() {
-    function applyColors() {
-        try {
-            var doc = window.parent.document;
-            var dm = doc.getElementById('dmchk');
-            var isDark = !!(dm && dm.checked);
-            var color = isDark ? '#FFFFFF' : '#2E1065';
-
-            var closedNodes = doc.querySelectorAll(
-                'div[data-testid="stSelectbox"] div[data-baseweb="select"] *'
-            );
-            closedNodes.forEach(function(el) {
-                el.style.setProperty('color', color, 'important');
-                el.style.setProperty('-webkit-text-fill-color', color, 'important');
-            });
-
-            var openNodes = doc.querySelectorAll(
-                'div[data-baseweb="popover"] li, div[data-baseweb="menu"] li, ' +
-                'div[data-baseweb="popover"] [role="option"], div[data-baseweb="menu"] [role="option"], ' +
-                'div[data-baseweb="popover"] li *, div[data-baseweb="menu"] li *, ' +
-                'div[data-baseweb="popover"] [role="option"] *, div[data-baseweb="menu"] [role="option"] *'
-            );
-            openNodes.forEach(function(el) {
-                el.style.setProperty('color', color, 'important');
-                el.style.setProperty('-webkit-text-fill-color', color, 'important');
-            });
-        } catch (e) { /* cross-origin or not-yet-mounted — ignore, next tick retries */ }
-    }
-    applyColors();
-    setInterval(applyColors, 350);
-})();
-</script>
-""", height=0)
 
 
 def sep():
@@ -1250,11 +1116,33 @@ st.markdown(
 
 # ═══════════════════════════════════════════════════
 # CONTROLS — keyed widgets so preferences persist across reruns
+#
+# NOTE: Voice & Accent / TTS Engine now use st.multiselect pinned to a
+# single item, instead of st.selectbox. st.multiselect's chip text has
+# been reliably readable in both themes throughout every screenshot —
+# st.selectbox's closed-value text was the one thing that never was,
+# regardless of how many CSS/JS approaches were tried. Reusing a widget
+# that's already proven to work sidesteps the problem entirely.
 # ═══════════════════════════════════════════════════
+def _pin_single(state_key: str, fallback: str):
+    """on_change callback: whichever option was just clicked becomes the
+    only selection — clicking a new option replaces the old one instead
+    of adding to it, giving single-select behaviour on a multiselect."""
+    sel = st.session_state[state_key]
+    if len(sel) > 1:
+        st.session_state[state_key] = [sel[-1]]
+    elif len(sel) == 0:
+        st.session_state[state_key] = [fallback]
+
+
+voice_keys = list(VOICE_OPTIONS.keys())
+if "voice_ms" not in st.session_state:
+    st.session_state.voice_ms = [voice_keys[0]]
+
 c1, c2, c3 = st.columns(3)
 with c1:
-    voice_choice = st.selectbox("🎙 Voice & Accent", options=list(VOICE_OPTIONS.keys()),
-                                index=0, key="pref_voice")
+    st.multiselect("🎙 Voice & Accent", options=voice_keys, key="voice_ms",
+                   on_change=_pin_single, args=("voice_ms", voice_keys[0]))
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
@@ -1262,7 +1150,15 @@ with c3:
     tts_engines = ["gTTS (Free)"]
     if ELEVENLABS_KEY:
         tts_engines += list(ELEVENLABS_VOICES.keys())
-    tts_choice = st.selectbox("🔊 TTS Engine", options=tts_engines, index=0, key="pref_tts")
+    if "tts_ms" not in st.session_state:
+        st.session_state.tts_ms = [tts_engines[0]]
+    if st.session_state.tts_ms[0] not in tts_engines:
+        st.session_state.tts_ms = [tts_engines[0]]
+    st.multiselect("🔊 TTS Engine", options=tts_engines, key="tts_ms",
+                   on_change=_pin_single, args=("tts_ms", tts_engines[0]))
+
+voice_choice = st.session_state.voice_ms[0] if st.session_state.voice_ms else voice_keys[0]
+tts_choice   = st.session_state.tts_ms[0] if st.session_state.tts_ms else tts_engines[0]
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
