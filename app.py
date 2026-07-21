@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import io
 import re
@@ -956,6 +957,57 @@ st.markdown(
     '<div class="orb orb3"></div><div class="orb orb4"></div></div>',
     unsafe_allow_html=True
 )
+
+# ═══════════════════════════════════════════════════
+# JS FORCE-COLOR FOR SELECTBOX TEXT
+#
+# Pure CSS kept losing this specific fight — the light-mode rule reliably
+# failed while the dark-mode rule reliably worked, which points to a
+# cascade/source-order tie that Streamlit's own internal styling wins.
+# Rather than keep guessing at selectors, this reaches into the actual
+# page DOM (via window.parent, since components.html renders in an
+# iframe) and sets each selectbox's text color as an inline style via
+# element.style.setProperty(prop, val, "important") — which has the
+# highest possible priority in the CSS cascade, guaranteed to beat any
+# stylesheet rule regardless of specificity or injection order. It polls
+# on an interval so it also catches the dropdown's option list the
+# moment it opens, and re-applies whenever the dark/light toggle flips.
+# ═══════════════════════════════════════════════════
+components.html("""
+<script>
+(function() {
+    function applyColors() {
+        try {
+            var doc = window.parent.document;
+            var dm = doc.getElementById('dmchk');
+            var isDark = !!(dm && dm.checked);
+            var color = isDark ? '#FFFFFF' : '#2E1065';
+
+            var closedNodes = doc.querySelectorAll(
+                'div[data-testid="stSelectbox"] div[data-baseweb="select"] *'
+            );
+            closedNodes.forEach(function(el) {
+                el.style.setProperty('color', color, 'important');
+                el.style.setProperty('-webkit-text-fill-color', color, 'important');
+            });
+
+            var openNodes = doc.querySelectorAll(
+                'div[data-baseweb="popover"] li, div[data-baseweb="menu"] li, ' +
+                'div[data-baseweb="popover"] [role="option"], div[data-baseweb="menu"] [role="option"], ' +
+                'div[data-baseweb="popover"] li *, div[data-baseweb="menu"] li *, ' +
+                'div[data-baseweb="popover"] [role="option"] *, div[data-baseweb="menu"] [role="option"] *'
+            );
+            openNodes.forEach(function(el) {
+                el.style.setProperty('color', color, 'important');
+                el.style.setProperty('-webkit-text-fill-color', color, 'important');
+            });
+        } catch (e) { /* cross-origin or not-yet-mounted — ignore, next tick retries */ }
+    }
+    applyColors();
+    setInterval(applyColors, 350);
+})();
+</script>
+""", height=0)
 
 
 def sep():
