@@ -693,47 +693,62 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
-/* ── PILL LABEL (section heading above radio groups) ── */
+/* ── PILL LABEL (section heading above button-pill groups) ── */
 .pill-label {
     color:#5B21B6 !important;font-size:0.74rem;font-weight:700;
     letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
 }
 body:has(#dmchk:checked) .pill-label { color:#C4B5FD !important; }
 
-/* ── RADIO AS PILLS — proven-readable widget replacing the unreadable
-   st.selectbox closed-state text for Voice & Accent / TTS Engine. ── */
-div[data-testid="stRadio"] > label { display:none; } /* hide Streamlit's own (redundant) label */
-div[data-testid="stRadio"] > div[role="radiogroup"] {
-    display:flex; flex-wrap:wrap; gap:10px; margin-bottom:1rem;
-}
-div[data-testid="stRadio"] label[data-baseweb="radio"] {
-    background:var(--input-bg) !important;
-    border:1.5px solid var(--input-bdr) !important;
+/* ── BUTTON-BASED PILL GROUPS — Voice & Accent / TTS Engine.
+   st.button is the one widget proven to render text correctly (see the
+   main gradient CTA), so selection here uses Streamlit's own native
+   primary/secondary button styling instead of any BaseWeb select/radio.
+   The marker div + general-sibling selector scopes these rules to ONLY
+   the row of columns immediately following each marker, leaving the
+   main "Generate Morning Brief" button completely untouched. ── */
+.pill-scope-voice, .pill-scope-tts { height:0; margin:0; }
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button {
     border-radius:999px !important;
-    padding:0.5rem 1.1rem !important;
-    margin:0 !important;
-    cursor:pointer;
-    transition:all 0.2s ease;
-}
-div[data-testid="stRadio"] label[data-baseweb="radio"]:hover {
-    border-color:#6D28D9 !important;
-    transform:translateY(-1px);
-}
-div[data-testid="stRadio"] label[data-baseweb="radio"] div:first-child {
-    display:none; /* hide the default radio dot — the pill background communicates selection */
-}
-div[data-testid="stRadio"] label[data-baseweb="radio"] p {
-    color:var(--text-main) !important;
-    font-size:0.88rem !important;
+    padding:0.5rem 0.6rem !important;
+    font-size:0.78rem !important;
     font-weight:600 !important;
-    margin:0 !important;
+    white-space:normal !important;
+    line-height:1.3 !important;
+    min-height:2.6rem !important;
+    box-shadow:none !important;
+    transform:none !important;
+    margin:0.2rem 0 !important;
 }
-/* Selected pill gets the brand gradient */
-div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover {
+    transform:translateY(-1px) !important;
+}
+/* Unselected pill = plain themed box + normal text color */
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"],
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] {
+    background:var(--input-bg) !important;
+    color:var(--text-main) !important;
+    border:1.5px solid var(--input-bdr) !important;
+}
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] p,
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] div,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] p,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] div {
+    color:var(--text-main) !important;
+}
+/* Selected pill = brand gradient + white text (Streamlit's "primary" button type) */
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"],
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] {
     background:linear-gradient(135deg,#6D28D9,#BE185D) !important;
-    border-color:transparent !important;
+    color:#FFFFFF !important;
+    border:none !important;
 }
-div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p {
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] p,
+.pill-scope-voice ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] div,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] p,
+.pill-scope-tts ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] div {
     color:#FFFFFF !important;
 }
 
@@ -1212,20 +1227,36 @@ st.markdown(
 # CONTROLS — keyed widgets so preferences persist across reruns
 #
 # NOTE: st.selectbox's closed-state value text resisted every CSS override
-# attempted (while st.radio / st.toggle labels render correctly, and
-# st.multiselect chips render correctly). So Voice & Accent and TTS Engine
-# now use st.radio instead — a widget we know is reliably readable in both
-# themes — and Script Language (purely informational/disabled) is now a
-# plain themed badge instead of a disabled dropdown.
+# attempted (BaseWeb select AND BaseWeb radio both resist external CSS).
+# The one widget type proven to render text correctly is st.button (visible
+# in the main gradient CTA below). So Voice & Accent and TTS Engine are now
+# built entirely from st.button pill groups using Streamlit's own native
+# primary/secondary button styling to indicate selection — no BaseWeb
+# component involved at all, so there's nothing left to fail to override.
 # ═══════════════════════════════════════════════════
+if "sel_voice" not in st.session_state:
+    st.session_state.sel_voice = list(VOICE_OPTIONS.keys())[0]
+if "sel_tts" not in st.session_state:
+    st.session_state.sel_tts = "gTTS (Free)"
+
 c2, cspacer = st.columns([1, 2])
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
 
 st.markdown('<div class="pill-label">🎙 Voice &amp; Accent</div>', unsafe_allow_html=True)
-voice_choice = st.radio("Voice & Accent", options=list(VOICE_OPTIONS.keys()),
-                        index=0, key="pref_voice", horizontal=True, label_visibility="collapsed")
+st.markdown('<div class="pill-scope-voice"></div>', unsafe_allow_html=True)
+voice_keys = list(VOICE_OPTIONS.keys())
+voice_cols = st.columns(len(voice_keys))
+for i, opt in enumerate(voice_keys):
+    with voice_cols[i]:
+        is_sel = st.session_state.sel_voice == opt
+        if st.button(opt, key=f"voice_btn_{i}",
+                    type="primary" if is_sel else "secondary",
+                    use_container_width=True):
+            st.session_state.sel_voice = opt
+            st.rerun()
+voice_choice = st.session_state.sel_voice
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
@@ -1238,8 +1269,19 @@ if ELEVENLABS_KEY:
 
 if len(tts_engines) > 1:
     st.markdown('<div class="pill-label">🔊 TTS Engine</div>', unsafe_allow_html=True)
-    tts_choice = st.radio("TTS Engine", options=tts_engines, index=0, key="pref_tts",
-                          horizontal=True, label_visibility="collapsed")
+    st.markdown('<div class="pill-scope-tts"></div>', unsafe_allow_html=True)
+    if st.session_state.sel_tts not in tts_engines:
+        st.session_state.sel_tts = tts_engines[0]
+    tts_cols = st.columns(len(tts_engines))
+    for i, opt in enumerate(tts_engines):
+        with tts_cols[i]:
+            is_sel = st.session_state.sel_tts == opt
+            if st.button(opt, key=f"tts_btn_{i}",
+                        type="primary" if is_sel else "secondary",
+                        use_container_width=True):
+                st.session_state.sel_tts = opt
+                st.rerun()
+    tts_choice = st.session_state.sel_tts
 else:
     tts_choice = tts_engines[0]
 
