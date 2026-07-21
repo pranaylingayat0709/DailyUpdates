@@ -391,11 +391,45 @@ def todays_learning_topic() -> str:
 # SYSTEM PROMPT — LLM only generates what live APIs can't.
 # When live news exists for a topic, the LLM does NOT regenerate it.
 # ═══════════════════════════════════════════════════
-def build_system_prompt(lang_code, llm_news_topics, need_weather_summary,
-                        need_learning, learning_topic, news_ctx):
+def build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line):
+    """
+    Minimal, fast prompt — produces ONLY greeting + spoken_script.
+    This is the only call the audio pipeline depends on, so it's kept
+    as small as possible and run in parallel with the visual-data call.
+    """
     lang_note = LANG_INSTRUCTION.get(lang_code, LANG_INSTRUCTION["en"])
+    news_block = f"\nTODAY'S HEADLINES (mention the most important ones in spoken_script):\n{news_ctx}" if news_ctx else ""
 
-    keys = ['"greeting": "Warm generic welcome — no personal name."']
+    return f"""
+You are the voice of SatiCast — a mindful, premium AI radio host.
+Generate ONLY greeting and spoken_script as a valid JSON object. Be fast.
+
+LANGUAGE RULE: {lang_note}
+{weather_line}
+{news_block}
+{quote_line}
+{word_line}
+
+STRICT RULES:
+- spoken_script: continuous natural prose, NO bullets/symbols — full-length radio script, not a summary.
+- Return ONLY valid JSON — no markdown fences, no preamble.
+- Do NOT address the listener by any personal name.
+
+Return a JSON object with EXACTLY these keys:
+{{
+  "greeting": "Warm generic welcome — no personal name.",
+  "spoken_script": "Complete TTS-ready narrative covering greeting, weather, today's top headlines, the quote, and the word of the day — natural full-length radio script."
+}}
+"""
+
+
+def build_visual_prompt(llm_news_topics, need_weather_summary, need_learning, learning_topic):
+    """
+    Everything the audio does NOT need: on-screen-only fields.
+    Runs concurrently with build_script_prompt's call — and is skipped
+    entirely (no API call at all) if nothing here is actually needed.
+    """
+    keys = []
     if need_weather_summary:
         keys.append('"weather_summary": "One vivid sentence describing today\'s weather."')
     topic_key_map = {
@@ -408,10 +442,8 @@ def build_system_prompt(lang_code, llm_news_topics, need_weather_summary,
         keys.append(topic_key_map[t])
     if need_learning:
         keys.append('"learning_byte": {"topic":"…","insight":"…","tip":"…"}')
-    keys.append('"spoken_script": "Complete TTS-ready narrative covering greeting, weather, today\'s top headlines, the quote, and the word of the day — natural full-length radio script."')
     keys_json = ",\n  ".join(keys)
 
-    news_block = f"\nTODAY'S HEADLINES (summarise the most important ones inside spoken_script):\n{news_ctx}" if news_ctx else ""
     learning_block = f'\nThe learning_byte MUST be about exactly this topic: "{learning_topic}"' if need_learning else ""
     gen_news_note = (
         f"\nFor these news sections, generate exactly 5 plausible current items each with a realistic source name: {', '.join(llm_news_topics)}."
@@ -419,18 +451,12 @@ def build_system_prompt(lang_code, llm_news_topics, need_weather_summary,
     )
 
     return f"""
-You are the voice of SatiCast — a mindful, premium AI radio host.
+You generate on-screen supplementary data for SatiCast, a daily briefing app.
 Generate ONLY the requested fields as a valid JSON object. Be fast and concise.
-
-LANGUAGE RULE: {lang_note}
-{news_block}
 {learning_block}
 {gen_news_note}
 
-STRICT RULES:
-- spoken_script: continuous natural prose, NO bullets/symbols — full-length radio script, not a summary.
-- Return ONLY valid JSON — no markdown fences, no preamble.
-- Do NOT address the listener by any personal name.
+Return ONLY valid JSON — no markdown fences, no preamble.
 
 Return a JSON object with EXACTLY these keys:
 {{
@@ -445,8 +471,8 @@ Return a JSON object with EXACTLY these keys:
 LOADER_STAGES = [
     ("🌸", "Waking up your morning brief…",   "Initialising SatiCast"),
     ("📡", "Fetching live data in parallel…", "Weather · News · Markets · Quote · Word"),
-    ("🧠", "Crafting your narrative…",        "AI is writing your full briefing script"),
-    ("🎵", "Generating voice audio…",         "Rendering speech"),
+    ("🧠", "Writing script &amp; visuals in parallel…", "Two AI calls running concurrently"),
+    ("🎵", "Generating voice audio…",         "Overlapped with any remaining visual data"),
     ("✨", "Polishing your digest…",          "Final quality pass"),
 ]
 
@@ -1153,65 +1179,93 @@ if trigger:
 
     try:
         current_date = datetime.now().strftime("%A, %B %d, %Y")
-        prompt = f"""
-Date: {current_date}
-City: {city}
-{weather_line}
-Topics: {', '.join(chosen_topics)}
 
-QUOTE to weave into spoken_script: "{live_quote.get('quote','')}" — {live_quote.get('author','')}
-WORD to mention in spoken_script: {live_word.get('word','')} — {live_word.get('definition','')}
-"""
-        completion = nim_client.chat.completions.create(
-            model="nvidia/llama-3.3-nemotron-super-49b-v1",
-            messages=[
-                {"role": "system", "content": build_system_prompt(
-                    lang_code, llm_news_topics, need_weather_summary,
-                    need_learning, learning_topic, news_ctx)},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=3200,   # generous headroom so the script never gets cut off mid-string
-            response_format={"type": "json_object"}
-        )
-        raw_content = completion.choices[0].message.content
+        quote_line = f'QUOTE to weave into spoken_script: "{live_quote.get("quote","")}" — {live_quote.get("author","")}'
+        word_line  = f'WORD to mention in spoken_script: {live_word.get("word","")} — {live_word.get("definition","")}'
+        user_ctx   = f"Date: {current_date}\nCity: {city}\nTopics: {', '.join(chosen_topics)}"
 
-        try:
-            payload = safe_parse_llm_json(raw_content)
-        except Exception:
-            # First attempt failed even after repair — retry once with a smaller,
-            # more tightly-scoped request so it fits comfortably within the token budget.
-            slot.markdown(render_loader(2), unsafe_allow_html=True)
-            retry_completion = nim_client.chat.completions.create(
+        needs_visual_call = need_weather_summary or bool(llm_news_topics) or need_learning
+
+        def call_script(user_message: str, max_words_hint: str = ""):
+            sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line)
+            msg = user_message + (f"\n\nIMPORTANT: {max_words_hint}" if max_words_hint else "")
+            c = nim_client.chat.completions.create(
                 model="nvidia/llama-3.3-nemotron-super-49b-v1",
-                messages=[
-                    {"role": "system", "content": build_system_prompt(
-                        lang_code, llm_news_topics, need_weather_summary,
-                        need_learning, learning_topic, news_ctx)},
-                    {"role": "user", "content": prompt + "\n\nIMPORTANT: Keep spoken_script concise (under 200 words) to guarantee the JSON completes."}
-                ],
-                temperature=0.2,
-                max_tokens=3200,
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": msg}],
+                temperature=0.3,
+                max_tokens=1800,   # script-only call needs far fewer tokens now
                 response_format={"type": "json_object"}
             )
-            payload = safe_parse_llm_json(retry_completion.choices[0].message.content)
-            completion = retry_completion
+            return safe_parse_llm_json(c.choices[0].message.content)
 
-        # ── OPTIONAL TTS ──
+        def call_visual(user_message: str):
+            sys_prompt = build_visual_prompt(llm_news_topics, need_weather_summary,
+                                             need_learning, learning_topic)
+            c = nim_client.chat.completions.create(
+                model="nvidia/llama-3.3-nemotron-super-49b-v1",
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": user_message}],
+                temperature=0.3,
+                max_tokens=1800,
+                response_format={"type": "json_object"}
+            )
+            return safe_parse_llm_json(c.choices[0].message.content)
+
+        slot.markdown(render_loader(2), unsafe_allow_html=True)
+
+        # ── LAUNCH SCRIPT + VISUAL CALLS IN PARALLEL ──
+        # (visual call only fires if there's actually something for it to generate)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            fut_script = ex.submit(call_script, user_ctx)
+            fut_visual = ex.submit(call_visual, user_ctx) if needs_visual_call else None
+
+            # Script result feeds TTS — grab it first, with a repair-retry inline.
+            try:
+                script_payload = fut_script.result(timeout=45)
+            except Exception:
+                script_payload = call_script(
+                    user_ctx, "Keep spoken_script concise (under 180 words) to guarantee the JSON completes."
+                )
+
+            tts_text = script_payload.get("spoken_script", "")
+
+            # ── TTS starts the instant the script is ready — overlapping
+            #    with the visual call if it's still in flight. ──
+            tts_future = None
+            if generate_audio and tts_text:
+                slot.markdown(render_loader(3), unsafe_allow_html=True)
+
+                def run_tts():
+                    audio_bytes = None
+                    if tts_choice != "gTTS (Free)" and ELEVENLABS_KEY:
+                        audio_bytes = elevenlabs_tts(tts_text, ELEVENLABS_VOICES.get(tts_choice))
+                    if audio_bytes is None:
+                        tts_obj = gTTS(text=tts_text, lang=lang_code, tld=tld_code, slow=False)
+                        fp = io.BytesIO()
+                        tts_obj.write_to_fp(fp)
+                        fp.seek(0)
+                        audio_bytes = fp.read()
+                    return audio_bytes
+
+                tts_future = ex.submit(run_tts)
+
+            # Collect visual result (if any) — this has likely already
+            # finished by now since it ran concurrently with the script call.
+            visual_payload = {}
+            if fut_visual is not None:
+                try:
+                    visual_payload = fut_visual.result(timeout=45)
+                except Exception:
+                    visual_payload = {}
+
+            audio_bytes = tts_future.result() if tts_future is not None else None
+
+        payload = {**visual_payload, **script_payload}
+
         audio_b64   = None
         listen_time = ""
-        tts_text    = payload.get("spoken_script", "")
-        if generate_audio and tts_text:
-            slot.markdown(render_loader(3), unsafe_allow_html=True)
-            audio_bytes = None
-            if tts_choice != "gTTS (Free)" and ELEVENLABS_KEY:
-                audio_bytes = elevenlabs_tts(tts_text, ELEVENLABS_VOICES.get(tts_choice))
-            if audio_bytes is None:
-                tts_obj = gTTS(text=tts_text, lang=lang_code, tld=tld_code, slow=False)
-                fp = io.BytesIO()
-                tts_obj.write_to_fp(fp)
-                fp.seek(0)
-                audio_bytes = fp.read()
+        if audio_bytes:
             audio_b64   = base64.b64encode(audio_bytes).decode()
             listen_time = word_count_to_minutes(tts_text)
 
