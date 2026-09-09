@@ -684,6 +684,15 @@ div[data-testid="stTextInput"] input {
 span[data-baseweb="tag"] { background:linear-gradient(135deg,#6D28D9,#BE185D) !important;color:#fff !important;border-radius:8px !important; }
 div[data-testid="stToggle"] label p, .stCheckbox label p { color:var(--text-main) !important;font-weight:600 !important; }
 
+/* ── PILLS WRAP SAFEGUARD — never let pill options overflow their
+   container; always wrap into additional rows instead. ── */
+div[data-testid="stPills"] > div,
+div[data-testid="stPills"] div[role="radiogroup"],
+div[data-testid="stPills"] div[role="group"] {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+}
+
 /* ── FALLBACK PILL GRID (only used if st.pills isn't available in this
    Streamlit version — see _pill_grid_fallback). Uses the same proven
    marker-sibling technique: a hidden marker placed right before the
@@ -1223,9 +1232,9 @@ def _pill_grid_fallback(label: str, options: list, state_key: str, default: str,
 
 voice_keys = list(VOICE_OPTIONS.keys())
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    voice_choice = pick_one_pill("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0])
+voice_choice = pick_one_pill("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0])
+
+c2, c3 = st.columns(2)
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
                                placeholder="e.g. Nagpur, Delhi, Pune…", key="pref_city")
