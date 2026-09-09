@@ -345,15 +345,55 @@ def repair_truncated_json(raw: str) -> dict:
         return {}
 
 
+def _strip_reasoning_wrapper(raw: str) -> str:
+    """
+    Nemotron 3.5 Lightning (and other hybrid reasoning models) can prepend
+    a <think>...</think> block before the actual JSON, or wrap the JSON in
+    markdown code fences. Strip both before any JSON parsing is attempted.
+    """
+    s = raw.strip()
+    s = re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL)
+    s = re.sub(r'^.*?</think>', '', s, count=1, flags=re.DOTALL)  # unterminated opening tag
+    s = re.sub(r'^```(?:json)?\s*', '', s.strip())
+    s = re.sub(r'```\s*$', '', s.strip())
+    return s.strip()
+
+
 def safe_parse_llm_json(raw: str) -> dict:
-    """Parse LLM JSON output, repairing truncation if needed."""
+    """Parse LLM JSON output, stripping any reasoning wrapper and repairing truncation if needed."""
+    s = _strip_reasoning_wrapper(raw)
     try:
-        return json.loads(raw)
+        return json.loads(s)
     except json.JSONDecodeError:
-        repaired = repair_truncated_json(raw)
+        repaired = repair_truncated_json(s)
         if repaired:
             return repaired
         raise
+
+
+def nim_chat_json(system_prompt: str, user_message: str, temperature: float, max_tokens: int):
+    """
+    Calls the NVIDIA NIM chat endpoint and returns the raw completion object.
+    Nemotron 3.5 Lightning is a hybrid reasoning model that can otherwise
+    prepend a <think>...</think> block before the JSON — this tries to
+    disable that via extra_body first, falling back cleanly if the server
+    rejects the parameter. safe_parse_llm_json() strips any leftover
+    <think> block regardless, as a safety net either way.
+    """
+    kwargs = dict(
+        model="nvidia/nemotron-3.5-lightning-30b-a3b",
+        messages=[{"role": "system", "content": system_prompt},
+                  {"role": "user", "content": user_message}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    try:
+        return nim_client.chat.completions.create(
+            **kwargs, extra_body={"chat_template_kwargs": {"thinking": False}}
+        )
+    except Exception:
+        return nim_client.chat.completions.create(**kwargs)
 
 
 def elevenlabs_tts(text: str, voice_id: str):
@@ -414,6 +454,7 @@ STRICT RULES:
 - spoken_script: continuous natural prose, NO bullets/symbols — full-length radio script, not a summary.
 - Return ONLY valid JSON — no markdown fences, no preamble.
 - Do NOT address the listener by any personal name.
+- Do NOT include any reasoning, chain-of-thought, or <think> tags — output ONLY the raw JSON object, starting with {{ and ending with }}.
 
 Return a JSON object with EXACTLY these keys:
 {{
@@ -444,7 +485,7 @@ You generate realistic current news headlines for a daily briefing app.
 Generate EXACTLY 5 plausible, distinct current news items for the "{topic_name}" category,
 each with a realistic and varied source name (e.g. Reuters, BBC, The Hindu, TechCrunch, ESPN — pick ones fitting the category).
 
-Return ONLY valid JSON — no markdown fences, no preamble. Return EXACTLY this key:
+Return ONLY valid JSON — no markdown fences, no preamble, no reasoning or <think> tags. Return EXACTLY this key:
 {{
   "{key}": [
     {{"headline":"…","detail":"…","source":"…"}},
@@ -472,7 +513,7 @@ You generate small on-screen supplementary fields for SatiCast, a daily briefing
 Generate ONLY the requested fields as a valid JSON object. Be fast and concise.
 {learning_block}
 
-Return ONLY valid JSON — no markdown fences, no preamble.
+Return ONLY valid JSON — no markdown fences, no preamble, no reasoning or <think> tags.
 
 Return a JSON object with EXACTLY these keys:
 {{
@@ -1287,14 +1328,7 @@ if trigger:
         def call_script(user_message: str, max_words_hint: str = ""):
             sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line)
             msg = user_message + (f"\n\nIMPORTANT: {max_words_hint}" if max_words_hint else "")
-            c = nim_client.chat.completions.create(
-                model="nvidia/llama-3.3-nemotron-super-49b-v1",
-                messages=[{"role": "system", "content": sys_prompt},
-                          {"role": "user", "content": msg}],
-                temperature=0.3,
-                max_tokens=1800,   # script-only call needs far fewer tokens now
-                response_format={"type": "json_object"}
-            )
+            c = nim_chat_json(sys_prompt, msg, temperature=0.3, max_tokens=1800)
             return safe_parse_llm_json(c.choices[0].message.content)
 
         def call_news_topic(topic_name: str) -> dict:
@@ -1305,38 +1339,20 @@ if trigger:
             """
             sys_prompt = build_news_topic_prompt(topic_name)
             msg = f"{user_ctx}\nGenerate the 5 {topic_name} news items now."
-            c = nim_client.chat.completions.create(
-                model="nvidia/llama-3.3-nemotron-super-49b-v1",
-                messages=[{"role": "system", "content": sys_prompt},
-                          {"role": "user", "content": msg}],
-                temperature=0.4,
-                max_tokens=1200,   # generous per-topic budget — only 5 short items needed
-                response_format={"type": "json_object"}
-            )
+            c = nim_chat_json(sys_prompt, msg, temperature=0.4, max_tokens=1200)
             try:
                 return safe_parse_llm_json(c.choices[0].message.content)
             except Exception:
                 # Retry once, even more tightly scoped
-                c2 = nim_client.chat.completions.create(
-                    model="nvidia/llama-3.3-nemotron-super-49b-v1",
-                    messages=[{"role": "system", "content": sys_prompt},
-                              {"role": "user", "content": msg + " Keep each 'detail' under 15 words."}],
-                    temperature=0.3,
-                    max_tokens=1200,
-                    response_format={"type": "json_object"}
+                c2 = nim_chat_json(
+                    sys_prompt, msg + " Keep each 'detail' under 15 words.",
+                    temperature=0.3, max_tokens=1200
                 )
                 return safe_parse_llm_json(c2.choices[0].message.content)
 
         def call_misc(user_message: str) -> dict:
             sys_prompt = build_misc_prompt(need_weather_summary, need_learning, learning_topic)
-            c = nim_client.chat.completions.create(
-                model="nvidia/llama-3.3-nemotron-super-49b-v1",
-                messages=[{"role": "system", "content": sys_prompt},
-                          {"role": "user", "content": user_message}],
-                temperature=0.3,
-                max_tokens=900,
-                response_format={"type": "json_object"}
-            )
+            c = nim_chat_json(sys_prompt, user_message, temperature=0.3, max_tokens=900)
             return safe_parse_llm_json(c.choices[0].message.content)
 
         slot.markdown(render_loader(2), unsafe_allow_html=True)
