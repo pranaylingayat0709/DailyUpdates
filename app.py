@@ -1059,17 +1059,56 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 .word-card:hover::before, .learn-card:hover::before { width:100%; }
 
 /* ── BOOK-STYLE PAGE TURNING for news sections ── */
+.news-book-wrap {
+    max-width:560px; margin:0 auto; position:relative; padding:6px 0 14px;
+}
+/* Stacked-pages illusion: two faint page edges peeking out behind the top card */
+.news-book-wrap::before, .news-book-wrap::after {
+    content:''; position:absolute; left:50%; border-radius:14px;
+    background:var(--news-bg); border:1.5px solid var(--news-bdr);
+}
+.news-book-wrap::before {
+    width:94%; height:100%; top:8px; transform:translateX(-50%);
+    z-index:0; opacity:0.6;
+}
+.news-book-wrap::after {
+    width:88%; height:100%; top:16px; transform:translateX(-50%);
+    z-index:-1; opacity:0.35;
+}
 .news-book-page {
     animation: bookPageTurn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
-    min-height:140px;
+    min-height:150px; position:relative; z-index:1;
+    border-radius:4px 16px 16px 4px !important;
+    border-left:5px solid #D97757 !important;
+    box-shadow:0 10px 28px rgba(0,0,0,0.1) !important;
 }
 @keyframes bookPageTurn {
-    from { opacity:0; transform:perspective(800px) rotateY(-8deg) translateX(-12px); }
+    from { opacity:0; transform:perspective(800px) rotateY(-10deg) translateX(-14px); }
     to   { opacity:1; transform:perspective(800px) rotateY(0deg) translateX(0); }
 }
 .book-dots { display:flex; justify-content:center; gap:6px; margin:0.8rem 0 0.5rem; }
 .book-dot { width:7px; height:7px; border-radius:50%; background:rgba(217,119,87,0.25); transition:all 0.25s ease; }
 .book-dot-active { background:#D97757; width:20px; border-radius:4px; }
+
+/* ── COMPACT BOOK-NAV BUTTONS — small round arrow buttons, NOT the giant
+   main-CTA pill style every other button inherits by default. Scoped via
+   marker+sibling so only the row right after .book-nav-scope is affected. ── */
+.book-nav-scope { height:0; margin:0; padding:0; }
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button {
+    display:flex !important; align-items:center; justify-content:center;
+    width:38px !important; height:38px !important; min-height:38px !important;
+    padding:0 !important; margin:0 auto !important;
+    border-radius:50% !important; font-size:1.1rem !important; font-weight:800 !important;
+    background:var(--card-bg) !important; color:#D97757 !important;
+    border:1.5px solid rgba(217,119,87,0.4) !important;
+    box-shadow:none !important; text-transform:none !important; letter-spacing:0 !important;
+}
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover:not(:disabled) {
+    background:#D97757 !important; color:#fff !important; transform:translateY(-1px) !important;
+}
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:disabled {
+    opacity:0.3 !important;
+}
 
 /* ── ACCESSIBILITY: visible focus rings for keyboard navigation ── */
 button:focus-visible, input:focus-visible, a:focus-visible,
@@ -1140,34 +1179,37 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
     )
 
     st.markdown(
+        f'<div class="news-book-wrap">'
         f'<div class="news-card news-book-page">'
         f'<div class="news-index {idx_cls}">0{idx+1}</div>'
         f'<div><div class="news-headline">{hl}</div>'
         f'<div class="news-detail">{item.get("detail","")}</div>'
-        f'{src_html}</div></div>',
+        f'{src_html}</div></div></div>',
         unsafe_allow_html=True
     )
 
-    # Page-turn controls — book-style, one item per "page"
+    # Page-turn controls — small compact arrow buttons, book-style, one item per "page"
     dots = "".join(
         '<span class="book-dot book-dot-active"></span>' if i == idx else '<span class="book-dot"></span>'
         for i in range(len(items))
     )
     st.markdown(f'<div class="book-dots">{dots}</div>', unsafe_allow_html=True)
 
-    bcol1, bcol2, bcol3 = st.columns([1, 2, 1])
-    with bcol1:
-        if st.button("◀ Prev", key=f"{page_key}_prev", disabled=(idx == 0), use_container_width=True):
+    st.markdown('<div class="book-nav-scope"></div>', unsafe_allow_html=True)
+    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns([3, 1, 2, 1, 3])
+    with bcol2:
+        if st.button("‹", key=f"{page_key}_prev", disabled=(idx == 0), use_container_width=True):
             st.session_state[page_key] -= 1
             st.rerun()
-    with bcol2:
+    with bcol3:
         st.markdown(
-            f'<div style="text-align:center;font-size:0.8rem;font-weight:700;'
-            f'color:var(--text-muted);padding-top:0.5rem;">Page {idx+1} of {len(items)}</div>',
+            f'<div style="text-align:center;font-size:0.72rem;font-weight:700;'
+            f'color:var(--text-muted);padding-top:0.55rem;letter-spacing:0.04em;">'
+            f'Page {idx+1} of {len(items)}</div>',
             unsafe_allow_html=True
         )
-    with bcol3:
-        if st.button("Next ▶", key=f"{page_key}_next", disabled=(idx == len(items) - 1), use_container_width=True):
+    with bcol4:
+        if st.button("›", key=f"{page_key}_next", disabled=(idx == len(items) - 1), use_container_width=True):
             st.session_state[page_key] += 1
             st.rerun()
 
