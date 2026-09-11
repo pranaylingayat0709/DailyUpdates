@@ -1,7 +1,9 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import io
 import re
+import time
 import base64
 import requests
 from datetime import datetime
@@ -199,6 +201,23 @@ def fetch_markets() -> dict:
         except Exception:
             pass
     return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_on_this_day() -> dict:
+    """Free Wikipedia 'On this day' fact — no API key required."""
+    try:
+        today = datetime.now()
+        url = f"https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/selected/{today.month:02d}/{today.day:02d}"
+        r = requests.get(url, timeout=6)
+        if r.status_code == 200:
+            events = r.json().get("selected", [])
+            if events:
+                e = events[0]
+                return {"year": e.get("year", ""), "text": e.get("text", "")}
+    except Exception:
+        pass
+    return {}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -431,7 +450,7 @@ def todays_learning_topic() -> str:
 # SYSTEM PROMPT — LLM only generates what live APIs can't.
 # When live news exists for a topic, the LLM does NOT regenerate it.
 # ═══════════════════════════════════════════════════
-def build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line):
+def build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line, user_name: str = ""):
     """
     Minimal, fast prompt — produces ONLY greeting + spoken_script.
     This is the only call the audio pipeline depends on, so it's kept
@@ -439,6 +458,12 @@ def build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line
     """
     lang_note = LANG_INSTRUCTION.get(lang_code, LANG_INSTRUCTION["en"])
     news_block = f"\nTODAY'S HEADLINES (mention the most important ones in spoken_script):\n{news_ctx}" if news_ctx else ""
+    name_rule = (
+        f'- Address the listener warmly by name ("{user_name}") once near the start of the greeting.'
+        if user_name.strip() else
+        "- Do NOT address the listener by any personal name."
+    )
+    greeting_hint = f'Warm welcome addressing "{user_name}" by name.' if user_name.strip() else "Warm generic welcome — no personal name."
 
     return f"""
 You are the voice of SatiCast — a mindful, premium AI radio host.
@@ -453,12 +478,12 @@ LANGUAGE RULE: {lang_note}
 STRICT RULES:
 - spoken_script: continuous natural prose, NO bullets/symbols — full-length radio script, not a summary.
 - Return ONLY valid JSON — no markdown fences, no preamble.
-- Do NOT address the listener by any personal name.
+{name_rule}
 - Do NOT include any reasoning, chain-of-thought, or <think> tags — output ONLY the raw JSON object, starting with {{ and ending with }}.
 
 Return a JSON object with EXACTLY these keys:
 {{
-  "greeting": "Warm generic welcome — no personal name.",
+  "greeting": "{greeting_hint}",
   "spoken_script": "Complete TTS-ready narrative covering greeting, weather, today's top headlines, the quote, and the word of the day — natural full-length radio script."
 }}
 """
@@ -792,6 +817,42 @@ body:has(#dmchk:checked) .listen-badge { color:#C4B5FD; }
     transition:transform 0.3s ease;
 }
 .weather-widget:hover { transform:translateY(-3px); }
+
+/* ── WEATHER PARTICLE ANIMATIONS ── */
+.wx-particles { position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:0; }
+.wx-rain span {
+    position:absolute; top:-10%; width:2px; height:14px;
+    background:linear-gradient(to bottom, transparent, rgba(56,189,248,0.6));
+    animation:wxFall 1s linear infinite;
+}
+.wx-rain span:nth-child(1){left:5%;animation-delay:0s;animation-duration:0.9s}
+.wx-rain span:nth-child(2){left:15%;animation-delay:0.2s;animation-duration:1.1s}
+.wx-rain span:nth-child(3){left:25%;animation-delay:0.4s;animation-duration:0.8s}
+.wx-rain span:nth-child(4){left:35%;animation-delay:0.1s;animation-duration:1.0s}
+.wx-rain span:nth-child(5){left:45%;animation-delay:0.3s;animation-duration:0.95s}
+.wx-rain span:nth-child(6){left:55%;animation-delay:0.5s;animation-duration:1.05s}
+.wx-rain span:nth-child(7){left:65%;animation-delay:0.15s;animation-duration:0.85s}
+.wx-rain span:nth-child(8){left:75%;animation-delay:0.35s;animation-duration:1.0s}
+.wx-rain span:nth-child(9){left:85%;animation-delay:0.25s;animation-duration:0.9s}
+.wx-rain span:nth-child(10){left:95%;animation-delay:0.45s;animation-duration:1.1s}
+.wx-rain span:nth-child(11){left:10%;animation-delay:0.6s;animation-duration:0.8s}
+.wx-rain span:nth-child(12){left:60%;animation-delay:0.05s;animation-duration:1.0s}
+@keyframes wxFall { 0%{transform:translateY(0);opacity:0.8} 100%{transform:translateY(140px);opacity:0} }
+
+.wx-sun .wx-ray {
+    position:absolute; top:-30%; right:-10%; width:160px; height:160px; border-radius:50%;
+    background:radial-gradient(circle, rgba(253,224,71,0.35), transparent 70%);
+    animation:wxPulse 3s ease-in-out infinite;
+}
+@keyframes wxPulse { 0%,100%{transform:scale(1);opacity:0.6} 50%{transform:scale(1.15);opacity:0.9} }
+
+.wx-clouds span {
+    position:absolute; top:20%; width:60px; height:20px; border-radius:20px;
+    background:rgba(255,255,255,0.35); animation:wxDrift 12s linear infinite;
+}
+.wx-clouds span:nth-child(1){top:15%;animation-delay:0s}
+.wx-clouds span:nth-child(2){top:55%;animation-delay:6s}
+@keyframes wxDrift { 0%{transform:translateX(-80px)} 100%{transform:translateX(340px)} }
 .weather-icon { font-size:3.4rem;line-height:1;animation:floatLotus 4s ease-in-out infinite; }
 .weather-temp { font-family:'Syne',sans-serif;font-size:2.4rem;font-weight:800;color:var(--weather-tc); }
 .weather-desc { font-size:0.9rem;font-weight:600;color:var(--weather-tc);opacity:0.85; }
@@ -933,6 +994,26 @@ body:has(#dmchk:checked) .focus-live-note { color:#A78BFA; }
 
 @keyframes fadeSlideDown { from{opacity:0;transform:translateY(-16px)} to{opacity:1;transform:translateY(0)} }
 @keyframes cardReveal { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── CUSTOM SCROLLBAR ── */
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:rgba(109,40,217,0.35); border-radius:99px; }
+::-webkit-scrollbar-thumb:hover { background:rgba(109,40,217,0.55); }
+
+/* ── PRINT-FRIENDLY ── */
+@media print {
+    .sati-bg, .dm-label, .stButton, #dmchk { display:none !important; }
+    .stApp { background:#fff !important; }
+    .sati-section, .news-card, .focus-card, .word-card, .learn-card { box-shadow:none !important; }
+}
+
+/* ── ACCESSIBILITY: visible focus rings for keyboard navigation ── */
+button:focus-visible, input:focus-visible, a:focus-visible,
+.dm-label:has(input:focus-visible) {
+    outline: 3px solid #6D28D9 !important;
+    outline-offset: 2px !important;
+}
 </style>
 """
 
@@ -1020,13 +1101,22 @@ def render_result(res: dict):
 
     if weather_data:
         wicon = weather_emoji(weather_data.get("icon", ""))
+        cond = weather_data.get("icon", "")
+        particle_html = ""
+        if cond in ("Rain", "Drizzle", "Thunderstorm"):
+            particle_html = '<div class="wx-particles wx-rain">' + '<span></span>' * 12 + '</div>'
+        elif cond == "Clear":
+            particle_html = '<div class="wx-particles wx-sun"><span class="wx-ray"></span></div>'
+        elif cond == "Clouds":
+            particle_html = '<div class="wx-particles wx-clouds"><span></span><span></span></div>'
         weather_html = (
-            f'<div class="weather-widget">'
-            f'<div class="weather-icon">{wicon}</div>'
-            f'<div><div class="weather-temp">{weather_data["temp"]}°C</div>'
+            f'<div class="weather-widget" style="position:relative;overflow:hidden;">'
+            f'{particle_html}'
+            f'<div class="weather-icon" style="position:relative;z-index:1;">{wicon}</div>'
+            f'<div style="position:relative;z-index:1;"><div class="weather-temp">{weather_data["temp"]}°C</div>'
             f'<div class="weather-desc">{weather_data["desc"]} · {city}</div>'
             f'<div class="weather-meta">💧 {weather_data["humidity"]}% · 💨 {weather_data["wind"]} km/h</div></div>'
-            f'<div><div class="weather-feels">Feels like</div>'
+            f'<div style="position:relative;z-index:1;"><div class="weather-feels">Feels like</div>'
             f'<div class="weather-temp" style="font-size:1.5rem">{weather_data["feels"]}°C</div></div>'
             f'</div>'
         )
@@ -1042,7 +1132,24 @@ def render_result(res: dict):
     st.markdown(f'<div class="hero-row">{audio_html}{weather_html}</div>', unsafe_allow_html=True)
 
     if audio_b64:
-        st.audio(base64.b64decode(audio_b64), format="audio/mp3", autoplay=res.get("fresh", False))
+        autoplay_attr = "autoplay" if res.get("fresh", False) else ""
+        components.html(f"""
+        <div style="font-family:'Inter',sans-serif;">
+            <audio id="satiAudioPlayer" controls {autoplay_attr} style="width:100%;border-radius:12px;"
+                   src="data:audio/mp3;base64,{audio_b64}"></audio>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                <span style="font-size:0.75rem;color:#94A3B8;align-self:center;margin-right:4px;">Speed:</span>
+                <button onclick="document.getElementById('satiAudioPlayer').playbackRate=0.75"
+                    style="padding:4px 10px;border-radius:999px;border:1px solid #6D28D9;background:transparent;color:#A78BFA;cursor:pointer;font-size:0.72rem;">0.75x</button>
+                <button onclick="document.getElementById('satiAudioPlayer').playbackRate=1.0"
+                    style="padding:4px 10px;border-radius:999px;border:1px solid #6D28D9;background:#6D28D9;color:#fff;cursor:pointer;font-size:0.72rem;">1x</button>
+                <button onclick="document.getElementById('satiAudioPlayer').playbackRate=1.25"
+                    style="padding:4px 10px;border-radius:999px;border:1px solid #6D28D9;background:transparent;color:#A78BFA;cursor:pointer;font-size:0.72rem;">1.25x</button>
+                <button onclick="document.getElementById('satiAudioPlayer').playbackRate=1.5"
+                    style="padding:4px 10px;border-radius:999px;border:1px solid #6D28D9;background:transparent;color:#A78BFA;cursor:pointer;font-size:0.72rem;">1.5x</button>
+            </div>
+        </div>
+        """, height=95)
         st.markdown(
             f'<div class="dl-wrap"><a href="data:audio/mp3;base64,{audio_b64}" '
             f'download="saticast_{datetime.now().strftime("%Y%m%d")}.mp3">⬇️ Download MP3</a></div>',
@@ -1053,8 +1160,17 @@ def render_result(res: dict):
     greeting = payload.get("greeting", "Good morning! Welcome to SatiCast.")
     st.markdown(f'<div class="greeting-card">👋 {greeting}</div>', unsafe_allow_html=True)
 
-    # ── MARKET PULSE ──
-    if "Market" in topics and markets_data:
+    live_tag = '<span class="live-source-badge">🔴 Live headlines</span>'
+
+    def items_for(topic_name, payload_key):
+        live = res.get(f"{NEWS_TOPIC_MAP[topic_name]}_live") or []
+        if live:
+            return live, live_tag
+        return payload.get(payload_key, []), ""
+
+    def render_market():
+        if not markets_data:
+            return
         sep()
         st.markdown(
             '<div class="sati-section"><div class="section-header">'
@@ -1073,34 +1189,30 @@ def render_result(res: dict):
             )
         st.markdown(f'<div class="market-strip">{chips}</div>', unsafe_allow_html=True)
 
-    live_tag = '<span class="live-source-badge">🔴 Live headlines</span>'
-
-    def items_for(topic_name, payload_key):
-        live = res.get(f"{NEWS_TOPIC_MAP[topic_name]}_live") or []
-        if live:
-            return live, live_tag
-        return payload.get(payload_key, []), ""
-
-    if "National" in topics:
+    def render_national():
         sep()
         items, badge = items_for("National", "india_news")
         news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge)
-    if "Global" in topics:
+
+    def render_global():
         sep()
         items, badge = items_for("Global", "global_news")
         news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge)
-    if "Tech" in topics:
+
+    def render_tech():
         sep()
         items, badge = items_for("Tech", "tech_news")
         news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge)
-    if "Sports" in topics:
+
+    def render_sports():
         items, badge = items_for("Sports", "sports_flash")
         if items:
             sep()
             news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge)
 
-    # ── LEARNING BYTE ──
-    if "Learning" in topics and payload.get("learning_byte"):
+    def render_learning():
+        if not payload.get("learning_byte"):
+            return
         sep()
         lb = payload["learning_byte"]
         topic_num = datetime.now().timetuple().tm_yday % len(LEARNING_TOPICS) + 1
@@ -1119,6 +1231,21 @@ def render_result(res: dict):
             f'</div></div>',
             unsafe_allow_html=True
         )
+
+    # Sections render in the SAME ORDER the user selected them in the
+    # "Topics to include" multiselect, instead of a fixed hardcoded order.
+    section_renderers = {
+        "Market":   render_market,
+        "National": render_national,
+        "Global":   render_global,
+        "Tech":     render_tech,
+        "Sports":   render_sports,
+        "Learning": render_learning,
+    }
+    for topic_name in topics:
+        renderer = section_renderers.get(topic_name)
+        if renderer:
+            renderer()
 
     # ── QUOTE + WORD side by side ──
     sep()
@@ -1162,6 +1289,31 @@ def render_result(res: dict):
     )
     st.markdown(f'<div class="dual-row">{quote_block}{word_block}</div>', unsafe_allow_html=True)
 
+    # ── ON THIS DAY ──
+    otd = res.get("on_this_day") or {}
+    if otd.get("text"):
+        sep()
+        st.markdown(
+            f'<div class="sati-section">'
+            f'<div class="section-header">'
+            f'<div class="section-badge badge-focus">📜</div>'
+            f'<h2 class="section-title">On This Day</h2>'
+            f'<span class="live-source-badge">🔗 Wikipedia</span></div>'
+            f'<div class="focus-card">'
+            f'<div class="focus-quote">{otd.get("year","")}</div>'
+            f'<div class="focus-expl" style="margin-top:0.4rem;">{otd["text"]}</div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+
+    # ── DOWNLOAD TEXT BRIEF ──
+    brief_txt = build_text_export(res)
+    st.download_button(
+        "⬇️ Download Brief as Text", data=brief_txt,
+        file_name=f"saticast_{datetime.now().strftime('%Y%m%d')}.txt",
+        mime="text/plain", key="dl_brief_txt"
+    )
+
     # ── FOOTER ──
     time_str = f' · {listen_time}' if listen_time else ''
     st.markdown(
@@ -1169,6 +1321,33 @@ def render_result(res: dict):
         f' · 🌆 {city} · {voice_choice}{time_str}</p></div>',
         unsafe_allow_html=True
     )
+
+
+def build_text_export(res: dict) -> str:
+    """Plain-text version of the brief for the download button."""
+    p = res["payload"]
+    lines = [
+        f"SATICAST — {res.get('gen_date','')}",
+        f"City: {res['city']} · Voice: {res['voice']} · Language: {res['lang']}",
+        "",
+        p.get("greeting", ""),
+        "",
+    ]
+    for key, title in [("india_news", "NATIONAL"), ("global_news", "GLOBAL"), ("tech_news", "TECH")]:
+        items = p.get(key) or res.get(f"{key.split('_')[0]}_live") or []
+        if items:
+            lines.append(f"— {title} —")
+            for i, item in enumerate(items, 1):
+                lines.append(f"{i}. {item.get('headline','')} — {item.get('detail','')}")
+            lines.append("")
+    q = res.get("quote", {})
+    if q.get("quote"):
+        lines.append(f'"{q["quote"]}" — {q.get("author","")}')
+        lines.append("")
+    w = res.get("word", {})
+    if w.get("word"):
+        lines.append(f"Word of the Day: {w['word']} — {w.get('definition','')}")
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════
@@ -1257,6 +1436,9 @@ with c5:
     generate_audio = st.toggle("🎧 Generate Audio", value=True, key="pref_audio",
                                help="Turn off to skip voice generation — text brief appears much faster.")
 
+your_name = st.text_input("👤 Your Name (optional — personalizes the greeting)",
+                          placeholder="e.g. Pranay", key="pref_name")
+
 st.markdown(
     f'<div class="script-lang-badge">📢 Script Language auto-follows your voice: '
     f'<strong>{lang_display}</strong></div>',
@@ -1266,9 +1448,28 @@ st.markdown(
 # ═══════════════════════════════════════════════════
 # GENERATE
 # ═══════════════════════════════════════════════════
-trigger = st.button("🪷 Generate Morning Brief")
+if "last_gen_time" not in st.session_state:
+    st.session_state.last_gen_time = 0.0
+
+RATE_LIMIT_SECS = 15
+now_ts = time.time()
+cooldown_left = RATE_LIMIT_SECS - (now_ts - st.session_state.last_gen_time)
+in_cooldown = cooldown_left > 0
+
+if in_cooldown:
+    st.markdown(
+        f'<div style="text-align:center;background:rgba(109,40,217,0.08);'
+        f'border:1.5px solid rgba(109,40,217,0.2);border-radius:14px;'
+        f'padding:0.6rem 1rem;margin-bottom:1rem;color:#6D28D9;font-weight:700;font-size:0.85rem;">'
+        f'⏳ Please wait {int(cooldown_left)+1}s before generating again</div>',
+        unsafe_allow_html=True
+    )
+
+trigger = st.button("🪷 Generate Morning Brief", disabled=in_cooldown)
 
 if trigger:
+    st.session_state.last_gen_time = time.time()
+
     if not chosen_topics:
         st.warning("⚠️ Please select at least one topic.")
         st.stop()
@@ -1284,6 +1485,7 @@ if trigger:
             "quote":   ex.submit(fetch_quote_of_day),
             "word":    ex.submit(fetch_word_of_day),
             "weather": ex.submit(fetch_weather, city),
+            "otd":     ex.submit(fetch_on_this_day),
         }
         if "Market" in chosen_topics:
             futs["markets"] = ex.submit(fetch_markets)
@@ -1301,6 +1503,7 @@ if trigger:
         live_word    = safe("word",    {"word": "", "pos": "", "definition": "", "example": "", "source": "", "source_url": ""})
         weather_data = safe("weather", {})
         markets_data = safe("markets", {})
+        on_this_day  = safe("otd", {})
         live_news    = {k: safe(k, []) for k in ("india", "global", "tech", "sports")}
 
     # Which news topics still need the LLM (no live data)?
@@ -1335,7 +1538,7 @@ if trigger:
         needs_misc_call = need_weather_summary or need_learning
 
         def call_script(user_message: str, max_words_hint: str = ""):
-            sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line)
+            sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line, your_name)
             msg = user_message + (f"\n\nIMPORTANT: {max_words_hint}" if max_words_hint else "")
             c = nim_chat_json(sys_prompt, msg, temperature=0.3, max_tokens=1800)
             return safe_parse_llm_json(c.choices[0].message.content)
@@ -1439,6 +1642,7 @@ if trigger:
             "word":        live_word,
             "weather":     weather_data,
             "markets":     markets_data,
+            "on_this_day": on_this_day,
             "india_live":  live_news["india"],
             "global_live": live_news["global"],
             "tech_live":   live_news["tech"],
@@ -1460,6 +1664,7 @@ if trigger:
         st.session_state.history = st.session_state.history[:7]
 
         slot.empty()
+        st.balloons()
 
     except Exception as e:
         slot.empty()
