@@ -1058,66 +1058,85 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 .news-card:hover::before, .focus-card:hover::before,
 .word-card:hover::before, .learn-card:hover::before { width:100%; }
 
-/* ── BOOK-STYLE PAGE TURNING for news sections ── */
+/* ── NEWSPAPER-STYLE PAGE TURNING for news sections ── */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,600&display=swap');
+
 .news-book-wrap {
-    max-width:560px; margin:0 auto; position:relative; padding:6px 0 14px;
+    max-width:600px; margin:0 auto; position:relative; padding:6px 0 14px;
 }
-/* Stacked-pages illusion: two faint page edges peeking out behind the top card */
+/* Stacked-pages illusion behind the top sheet */
 .news-book-wrap::before, .news-book-wrap::after {
-    content:''; position:absolute; left:50%; border-radius:14px;
-    background:var(--news-bg); border:1.5px solid var(--news-bdr);
+    content:''; position:absolute; left:50%;
+    background:#F3EAD8; border:1px solid rgba(139,58,31,0.18);
 }
-.news-book-wrap::before {
-    width:94%; height:100%; top:8px; transform:translateX(-50%);
-    z-index:0; opacity:0.6;
-}
-.news-book-wrap::after {
-    width:88%; height:100%; top:16px; transform:translateX(-50%);
-    z-index:-1; opacity:0.35;
-}
+.news-book-wrap::before { width:95%; height:100%; top:7px; transform:translateX(-50%) rotate(-0.6deg); z-index:0; opacity:0.7; }
+.news-book-wrap::after  { width:90%; height:100%; top:13px; transform:translateX(-50%) rotate(0.9deg); z-index:-1; opacity:0.4; }
+
 .news-book-page {
-    animation: bookPageTurn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
+    animation: paperTurn 0.45s cubic-bezier(0.34,1.56,0.64,1) both;
     min-height:150px; position:relative; z-index:1;
-    border-radius:4px 16px 16px 4px !important;
-    border-left:5px solid #D97757 !important;
-    box-shadow:0 10px 28px rgba(0,0,0,0.1) !important;
+    background:
+        repeating-linear-gradient(#F9F4E8 0 27px, rgba(139,58,31,0.05) 27px 28px)
+        !important;
+    border:1px solid rgba(139,58,31,0.25) !important;
+    border-radius:2px !important;
+    box-shadow:0 12px 30px rgba(60,30,10,0.14), inset 0 0 40px rgba(139,58,31,0.04) !important;
+    padding:1.6rem 1.8rem 1.4rem !important;
 }
-@keyframes bookPageTurn {
-    from { opacity:0; transform:perspective(800px) rotateY(-10deg) translateX(-14px); }
-    to   { opacity:1; transform:perspective(800px) rotateY(0deg) translateX(0); }
+@keyframes paperTurn {
+    from { opacity:0; transform:perspective(900px) rotateY(-14deg) translateX(-18px); }
+    to   { opacity:1; transform:perspective(900px) rotateY(0deg) translateX(0); }
 }
-.book-dots { display:flex; justify-content:center; gap:6px; margin:0.8rem 0 0.5rem; }
-.book-dot { width:7px; height:7px; border-radius:50%; background:rgba(217,119,87,0.25); transition:all 0.25s ease; }
-.book-dot-active { background:#D97757; width:20px; border-radius:4px; }
+/* Masthead-style rule above/below the headline */
+.news-book-page .news-headline {
+    font-family:'Playfair Display',Georgia,serif !important;
+    font-size:1.15rem !important; font-weight:800 !important;
+    border-bottom:2px double rgba(139,58,31,0.3);
+    padding-bottom:0.5rem; margin-bottom:0.5rem !important;
+}
+.news-book-page .news-detail {
+    font-family:Georgia,'Times New Roman',serif !important;
+    font-size:0.9rem !important; line-height:1.65 !important;
+    column-count:1;
+}
+.news-book-page .news-index {
+    font-family:'Playfair Display',Georgia,serif !important;
+    font-style:italic; font-size:1.4rem !important;
+    color:#8B3A1F !important; opacity:0.55;
+}
+.news-book-page .news-source {
+    font-family:Georgia,serif !important; font-style:italic;
+    text-transform:none !important; letter-spacing:0.02em !important;
+    border:1px solid rgba(139,58,31,0.3) !important; background:transparent !important;
+}
 
-/* ── COMPACT BOOK-NAV BUTTONS — small round arrow buttons, NOT the giant
-   main-CTA pill style every other button inherits by default. Uses :has()
-   to find the container holding the marker, then targets whatever comes
-   right after it — robust regardless of how many wrapper divs Streamlit
-   places between the marker and the button (unlike a plain "~" sibling
-   selector, which broke if the marker wasn't a DIRECT sibling of the
-   button's own wrapper). Multiple candidate selectors are layered so at
-   least one matches the actual DOM depth. ── */
+.book-dots { display:flex; justify-content:center; align-items:center; gap:8px; margin:0.9rem 0 0.6rem; }
+.book-dot { width:5px; height:5px; border-radius:50%; background:rgba(139,58,31,0.3); transition:all 0.25s ease; }
+.book-dot-active { background:#8B3A1F; width:5px; transform:scale(1.8); }
+
+/* ── NEWSPAPER "TURN THE PAGE" BUTTONS ──
+   Rather than fighting Streamlit's built-in button padding (which kept
+   winning the CSS specificity fight regardless of approach), these use
+   FULL TEXT labels ("‹ Previous Page" / "Next Page ›") styled at whatever
+   natural size Streamlit renders — guaranteed to show real, readable
+   words instead of a lone glyph that could vanish in some fonts. ── */
 .book-nav-scope { height:0; margin:0; padding:0; }
-
-div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button,
-.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button {
-    display:flex !important; align-items:center; justify-content:center;
-    width:38px !important; height:38px !important; min-height:38px !important;
-    padding:0 !important; margin:0 auto !important;
-    border-radius:50% !important; font-size:1.1rem !important; font-weight:800 !important;
-    background:var(--card-bg) !important; color:#D97757 !important;
-    border:1.5px solid rgba(217,119,87,0.4) !important;
-    box-shadow:none !important; text-transform:none !important; letter-spacing:0 !important;
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"] button {
+    font-family:'Playfair Display',Georgia,serif !important;
+    font-style:italic !important; font-weight:700 !important;
+    font-size:0.85rem !important; letter-spacing:0.01em !important;
+    text-transform:none !important;
+    background:#F9F4E8 !important; color:#8B3A1F !important;
+    border:1.5px solid rgba(139,58,31,0.4) !important;
+    border-radius:3px !important;
+    box-shadow:2px 2px 0 rgba(139,58,31,0.15) !important;
 }
-div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button:hover:not(:disabled),
-.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover:not(:disabled) {
-    background:#D97757 !important; color:#fff !important; transform:translateY(-1px) !important;
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"] button:hover:not(:disabled) {
+    background:#8B3A1F !important; color:#F9F4E8 !important;
+    transform:translate(-1px,-1px) !important;
+    box-shadow:3px 3px 0 rgba(139,58,31,0.25) !important;
 }
-div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button:disabled,
-.book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:disabled {
-    opacity:0.3 !important;
-}
+.book-nav-scope ~ div[data-testid="stHorizontalBlock"] button:disabled { opacity:0.25 !important; }
 
 /* ── ACCESSIBILITY: visible focus rings for keyboard navigation ── */
 button:focus-visible, input:focus-visible, a:focus-visible,
@@ -1199,7 +1218,9 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
         unsafe_allow_html=True
     )
 
-    # Page-turn controls — small compact arrow buttons, book-style, one item per "page"
+    # Page-turn controls — newspaper-style "turn the page" links with full
+    # text labels (guaranteed to render, unlike a lone glyph that could
+    # vanish depending on the font actually applied to the button).
     dots = "".join(
         '<span class="book-dot book-dot-active"></span>' if i == idx else '<span class="book-dot"></span>'
         for i in range(len(items))
@@ -1207,20 +1228,20 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
     st.markdown(f'<div class="book-dots">{dots}</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="book-nav-scope"></div>', unsafe_allow_html=True)
-    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns([3, 1, 2, 1, 3])
+    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns([1, 2.4, 1.6, 2.4, 1])
     with bcol2:
-        if st.button("‹", key=f"{page_key}_prev", disabled=(idx == 0), use_container_width=True):
+        if st.button("‹ Previous Page", key=f"{page_key}_prev", disabled=(idx == 0), use_container_width=True):
             st.session_state[page_key] -= 1
             st.rerun()
     with bcol3:
         st.markdown(
-            f'<div style="text-align:center;font-size:0.72rem;font-weight:700;'
-            f'color:var(--text-muted);padding-top:0.55rem;letter-spacing:0.04em;">'
-            f'Page {idx+1} of {len(items)}</div>',
+            f'<div style="text-align:center;font-family:Georgia,serif;font-style:italic;'
+            f'font-size:0.78rem;font-weight:700;color:#8B3A1F;padding-top:0.6rem;'
+            f'letter-spacing:0.03em;">— {idx+1} of {len(items)} —</div>',
             unsafe_allow_html=True
         )
     with bcol4:
-        if st.button("›", key=f"{page_key}_next", disabled=(idx == len(items) - 1), use_container_width=True):
+        if st.button("Next Page ›", key=f"{page_key}_next", disabled=(idx == len(items) - 1), use_container_width=True):
             st.session_state[page_key] += 1
             st.rerun()
 
