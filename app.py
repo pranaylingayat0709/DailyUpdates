@@ -1011,6 +1011,20 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
     .sati-section, .news-card, .focus-card, .word-card, .learn-card { box-shadow:none !important; }
 }
 
+/* ── CARD HOVER ACCENT SWEEP — matching claude.com/blog's card hover style ── */
+.news-card, .focus-card, .word-card, .learn-card, .weather-widget, .audio-shell {
+    position:relative;
+}
+.news-card::before, .focus-card::before, .word-card::before, .learn-card::before {
+    content:'';
+    position:absolute; top:0; left:0; height:3px; width:0;
+    background:linear-gradient(90deg,#D97757,#B45532);
+    transition:width 0.35s ease;
+    border-radius:3px 3px 0 0;
+}
+.news-card:hover::before, .focus-card:hover::before,
+.word-card:hover::before, .learn-card:hover::before { width:100%; }
+
 /* ── ACCESSIBILITY: visible focus rings for keyboard navigation ── */
 button:focus-visible, input:focus-visible, a:focus-visible,
 .dm-label:has(input:focus-visible) {
@@ -1392,16 +1406,12 @@ st.markdown(
 def pick_one_pill(label: str, options: list, state_key: str, default: str):
     if state_key not in st.session_state or st.session_state[state_key] not in options:
         st.session_state[state_key] = default
-    try:
-        val = st.pills(label, options=options, key=state_key, selection_mode="single")
-        if val is None:
-            # st.pills allows de-selecting to nothing — snap back to current/default
-            st.session_state[state_key] = st.session_state.get(state_key) or default
-            val = st.session_state[state_key]
-        return val
-    except (AttributeError, TypeError):
-        # st.pills not available in this Streamlit version — button-grid fallback.
-        return _pill_grid_fallback(label, options, state_key, default)
+    # NOTE: st.pills' own internal styling (label color, unselected pill
+    # background) is controlled by Streamlit's built-in theme and cannot be
+    # reliably overridden by our CSS — it rendered with poor contrast against
+    # our custom cream/terracotta theme. The button-grid fallback below is
+    # fully ours to style, so it's used unconditionally for consistent theming.
+    return _pill_grid_fallback(label, options, state_key, default)
 
 
 def _pill_grid_fallback(label: str, options: list, state_key: str, default: str, per_row: int = 3):
