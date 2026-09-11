@@ -1091,9 +1091,16 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 .book-dot-active { background:#D97757; width:20px; border-radius:4px; }
 
 /* ── COMPACT BOOK-NAV BUTTONS — small round arrow buttons, NOT the giant
-   main-CTA pill style every other button inherits by default. Scoped via
-   marker+sibling so only the row right after .book-nav-scope is affected. ── */
+   main-CTA pill style every other button inherits by default. Uses :has()
+   to find the container holding the marker, then targets whatever comes
+   right after it — robust regardless of how many wrapper divs Streamlit
+   places between the marker and the button (unlike a plain "~" sibling
+   selector, which broke if the marker wasn't a DIRECT sibling of the
+   button's own wrapper). Multiple candidate selectors are layered so at
+   least one matches the actual DOM depth. ── */
 .book-nav-scope { height:0; margin:0; padding:0; }
+
+div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button,
 .book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button {
     display:flex !important; align-items:center; justify-content:center;
     width:38px !important; height:38px !important; min-height:38px !important;
@@ -1103,9 +1110,11 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
     border:1.5px solid rgba(217,119,87,0.4) !important;
     box-shadow:none !important; text-transform:none !important; letter-spacing:0 !important;
 }
+div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button:hover:not(:disabled),
 .book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover:not(:disabled) {
     background:#D97757 !important; color:#fff !important; transform:translateY(-1px) !important;
 }
+div:has(> .book-nav-scope) + div div[data-testid="stHorizontalBlock"] button:disabled,
 .book-nav-scope ~ div[data-testid="stHorizontalBlock"]:first-of-type button:disabled {
     opacity:0.3 !important;
 }
@@ -1163,18 +1172,20 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
     url = item.get("url", "")
     hl_text = item.get("headline", "")
     has_real_url = bool(url)
-    if not url and hl_text:
-        # No real article URL (AI-generated item, not live-fetched) — link to
-        # a search for the headline, since we can't point to a specific article.
-        q = urllib.parse.quote(f"{hl_text} {src}".strip())
-        url = f"https://www.google.com/search?q={q}&tbm=nws"
-    source_url = url if has_real_url else resolve_source_url(src, hl_text)
+    if has_real_url:
+        # Live-fetched item — we have the exact article URL.
+        final_url = url
+    else:
+        # AI-generated item — no specific article exists. Prefer the real
+        # outlet's homepage if we recognise the source name; only fall back
+        # to a headline search when the source is unrecognised.
+        final_url = resolve_source_url(src, hl_text)
 
-    hl = (f'<a href="{url}" target="_blank" style="color:inherit;text-decoration:none;">{hl_text}</a>'
-          if url else hl_text)
+    hl = (f'<a href="{final_url}" target="_blank" style="color:inherit;text-decoration:none;">{hl_text}</a>'
+          if final_url else hl_text)
     src_html = (
-        f'<a href="{source_url}" target="_blank" class="news-source">{src} ↗</a>'
-        if src and source_url else
+        f'<a href="{final_url}" target="_blank" class="news-source">{src} ↗</a>'
+        if src and final_url else
         (f'<span class="news-source">{src}</span>' if src else "")
     )
 
