@@ -123,6 +123,39 @@ LEARNING_TOPICS = [
 
 NEWS_TOPIC_MAP = {"National": "india", "Global": "global", "Tech": "tech", "Sports": "sports"}
 
+# Maps a source NAME (as the LLM writes it, case-insensitive) to that outlet's
+# real homepage — so clicking the source badge opens the actual outlet's site
+# instead of a generic search, even for AI-generated items with no article URL.
+SOURCE_HOMEPAGES = {
+    "reuters": "https://www.reuters.com", "the hindu": "https://www.thehindu.com",
+    "bbc": "https://www.bbc.com/news", "pti": "https://www.ptinews.com",
+    "ndtv": "https://www.ndtv.com", "hindustan times": "https://www.hindustantimes.com",
+    "times of india": "https://timesofindia.indiatimes.com", "the guardian": "https://www.theguardian.com",
+    "cnn": "https://www.cnn.com", "al jazeera": "https://www.aljazeera.com",
+    "bloomberg": "https://www.bloomberg.com", "cnbc": "https://www.cnbc.com",
+    "techcrunch": "https://techcrunch.com", "the verge": "https://www.theverge.com",
+    "wired": "https://www.wired.com", "ars technica": "https://arstechnica.com",
+    "espn": "https://www.espn.com", "sky sports": "https://www.skysports.com",
+    "cricinfo": "https://www.espncricinfo.com", "espncricinfo": "https://www.espncricinfo.com",
+    "indian express": "https://indianexpress.com", "livemint": "https://www.livemint.com",
+    "economic times": "https://economictimes.indiatimes.com", "moneycontrol": "https://www.moneycontrol.com",
+    "ap": "https://apnews.com", "associated press": "https://apnews.com",
+    "afp": "https://www.afp.com", "the wire": "https://thewire.in",
+    "scroll.in": "https://scroll.in", "the print": "https://theprint.in",
+}
+
+
+def resolve_source_url(source: str, fallback_headline: str = "") -> str:
+    """Real outlet homepage if we recognise the source name, else a search
+    fallback for the headline — never a fabricated specific-article URL."""
+    key = source.strip().lower()
+    if key in SOURCE_HOMEPAGES:
+        return SOURCE_HOMEPAGES[key]
+    if fallback_headline:
+        q = urllib.parse.quote(f"{fallback_headline} {source}".strip())
+        return f"https://www.google.com/search?q={q}&tbm=nws"
+    return ""
+
 # ═══════════════════════════════════════════════════
 # LIVE DATA HELPERS
 # ═══════════════════════════════════════════════════
@@ -1025,6 +1058,19 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 .news-card:hover::before, .focus-card:hover::before,
 .word-card:hover::before, .learn-card:hover::before { width:100%; }
 
+/* ── BOOK-STYLE PAGE TURNING for news sections ── */
+.news-book-page {
+    animation: bookPageTurn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
+    min-height:140px;
+}
+@keyframes bookPageTurn {
+    from { opacity:0; transform:perspective(800px) rotateY(-8deg) translateX(-12px); }
+    to   { opacity:1; transform:perspective(800px) rotateY(0deg) translateX(0); }
+}
+.book-dots { display:flex; justify-content:center; gap:6px; margin:0.8rem 0 0.5rem; }
+.book-dot { width:7px; height:7px; border-radius:50%; background:rgba(217,119,87,0.25); transition:all 0.25s ease; }
+.book-dot-active { background:#D97757; width:20px; border-radius:4px; }
+
 /* ── ACCESSIBILITY: visible focus rings for keyboard navigation ── */
 button:focus-visible, input:focus-visible, a:focus-visible,
 .dm-label:has(input:focus-visible) {
@@ -1054,7 +1100,7 @@ def sep():
     )
 
 
-def news_section(title, badge_cls, idx_cls, icon, items, live_badge=""):
+def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key=""):
     st.markdown(
         f'<div class="sati-section">'
         f'<div class="section-header">'
@@ -1062,32 +1108,70 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge=""):
         f'<h2 class="section-title">{title}</h2>{live_badge}</div>',
         unsafe_allow_html=True
     )
-    cards = ""
-    for i, item in enumerate(items, 1):
-        src = item.get("source", "")
-        url = item.get("url", "")
-        hl_text = item.get("headline", "")
-        if not url and hl_text:
-            # No real article URL (this item was AI-generated, not live-fetched) —
-            # link to a search for the headline instead of pretending we have
-            # the exact source article.
-            q = urllib.parse.quote(f"{hl_text} {src}".strip())
-            url = f"https://www.google.com/search?q={q}&tbm=nws"
-        hl = (f'<a href="{url}" target="_blank" style="color:inherit;text-decoration:none;">{hl_text}</a>'
-              if url else hl_text)
-        src_html = (
-            f'<a href="{url}" target="_blank" class="news-source">{src} ↗</a>'
-            if src and url else
-            (f'<span class="news-source">{src}</span>' if src else "")
+
+    if not items:
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+
+    page_key = f"news_page_{section_key}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+    st.session_state[page_key] = max(0, min(st.session_state[page_key], len(items) - 1))
+    idx = st.session_state[page_key]
+    item = items[idx]
+
+    src = item.get("source", "")
+    url = item.get("url", "")
+    hl_text = item.get("headline", "")
+    has_real_url = bool(url)
+    if not url and hl_text:
+        # No real article URL (AI-generated item, not live-fetched) — link to
+        # a search for the headline, since we can't point to a specific article.
+        q = urllib.parse.quote(f"{hl_text} {src}".strip())
+        url = f"https://www.google.com/search?q={q}&tbm=nws"
+    source_url = url if has_real_url else resolve_source_url(src, hl_text)
+
+    hl = (f'<a href="{url}" target="_blank" style="color:inherit;text-decoration:none;">{hl_text}</a>'
+          if url else hl_text)
+    src_html = (
+        f'<a href="{source_url}" target="_blank" class="news-source">{src} ↗</a>'
+        if src and source_url else
+        (f'<span class="news-source">{src}</span>' if src else "")
+    )
+
+    st.markdown(
+        f'<div class="news-card news-book-page">'
+        f'<div class="news-index {idx_cls}">0{idx+1}</div>'
+        f'<div><div class="news-headline">{hl}</div>'
+        f'<div class="news-detail">{item.get("detail","")}</div>'
+        f'{src_html}</div></div>',
+        unsafe_allow_html=True
+    )
+
+    # Page-turn controls — book-style, one item per "page"
+    dots = "".join(
+        '<span class="book-dot book-dot-active"></span>' if i == idx else '<span class="book-dot"></span>'
+        for i in range(len(items))
+    )
+    st.markdown(f'<div class="book-dots">{dots}</div>', unsafe_allow_html=True)
+
+    bcol1, bcol2, bcol3 = st.columns([1, 2, 1])
+    with bcol1:
+        if st.button("◀ Prev", key=f"{page_key}_prev", disabled=(idx == 0), use_container_width=True):
+            st.session_state[page_key] -= 1
+            st.rerun()
+    with bcol2:
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.8rem;font-weight:700;'
+            f'color:var(--text-muted);padding-top:0.5rem;">Page {idx+1} of {len(items)}</div>',
+            unsafe_allow_html=True
         )
-        cards += (
-            f'<div class="news-card">'
-            f'<div class="news-index {idx_cls}">0{i}</div>'
-            f'<div><div class="news-headline">{hl}</div>'
-            f'<div class="news-detail">{item.get("detail","")}</div>'
-            f'{src_html}</div></div>'
-        )
-    st.markdown(f'<div class="news-grid">{cards}</div></div>', unsafe_allow_html=True)
+    with bcol3:
+        if st.button("Next ▶", key=f"{page_key}_next", disabled=(idx == len(items) - 1), use_container_width=True):
+            st.session_state[page_key] += 1
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════
@@ -1219,23 +1303,23 @@ def render_result(res: dict):
     def render_national():
         sep()
         items, badge = items_for("National", "india_news")
-        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge)
+        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge, "National")
 
     def render_global():
         sep()
         items, badge = items_for("Global", "global_news")
-        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge)
+        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge, "Global")
 
     def render_tech():
         sep()
         items, badge = items_for("Tech", "tech_news")
-        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge)
+        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge, "Tech")
 
     def render_sports():
         items, badge = items_for("Sports", "sports_flash")
         if items:
             sep()
-            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge)
+            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge, "Sports")
 
     def render_learning():
         if not payload.get("learning_byte"):
