@@ -156,6 +156,47 @@ def resolve_source_url(source: str, fallback_headline: str = "") -> str:
         return f"https://www.google.com/search?q={q}&tbm=nws"
     return ""
 
+
+_CROSS_REF_STOPWORDS = {
+    "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "or",
+    "with", "by", "is", "are", "new", "after", "amid", "over", "its",
+    "this", "that", "from", "as", "into", "amid", "will", "has", "have",
+}
+
+
+def _extract_keywords(text: str) -> set:
+    words = re.findall(r"[A-Za-z']+", text or "")
+    return {w.lower() for w in words if len(w) > 3 and w.lower() not in _CROSS_REF_STOPWORDS}
+
+
+def find_cross_references(items_by_topic: dict, min_shared: int = 2) -> dict:
+    """
+    Pure-Python, zero-API-call heuristic: flags pairs of headlines from
+    DIFFERENT topics that share several significant keywords, suggesting
+    they cover the same underlying story (e.g. a policy story appearing
+    in both National and Global). This is a best-effort keyword-overlap
+    heuristic, not real semantic understanding — it will miss some genuine
+    overlaps and could occasionally flag a coincidental one, so it's shown
+    only as a soft "possibly related" hint, never a confident claim.
+    Returns {(topic, idx): [(other_topic, other_idx, other_headline), ...]}.
+    """
+    flat = []
+    for topic, items in items_by_topic.items():
+        for idx, item in enumerate(items):
+            flat.append((topic, idx, _extract_keywords(item.get("headline", "")), item.get("headline", "")))
+
+    refs = {}
+    for i in range(len(flat)):
+        for j in range(i + 1, len(flat)):
+            t1, i1, kw1, h1 = flat[i]
+            t2, i2, kw2, h2 = flat[j]
+            if t1 == t2 or not kw1 or not kw2:
+                continue
+            if len(kw1 & kw2) >= min_shared:
+                refs.setdefault((t1, i1), []).append((t2, i2, h2))
+                refs.setdefault((t2, i2), []).append((t1, i1, h1))
+    return refs
+
 # ═══════════════════════════════════════════════════
 # LIVE DATA HELPERS
 # ═══════════════════════════════════════════════════
@@ -220,18 +261,47 @@ def fetch_news(topic: str, page_size: int = 5) -> list:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def make_sparkline_svg(values: list, up: bool) -> str:
+    """Tiny inline SVG line chart from a list of prices — pure Python/SVG,
+    no JS, no external chart library needed."""
+    if len(values) < 2:
+        return ""
+    w, h, pad = 70, 24, 3
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1
+    step = (w - 2 * pad) / (len(values) - 1)
+    points = []
+    for i, v in enumerate(values):
+        x = pad + i * step
+        y = pad + (1 - (v - lo) / span) * (h - 2 * pad)
+        points.append(f"{x:.1f},{y:.1f}")
+    color = "#10B981" if up else "#EF4444"
+    poly = " ".join(points)
+    return (
+        f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="display:block;">'
+        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.8" '
+        f'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_markets() -> dict:
     if not YFINANCE_OK:
         return {}
     result = {}
     for name, ticker in MARKET_TICKERS.items():
         try:
-            hist = yf.Ticker(ticker).history(period="2d")
+            hist = yf.Ticker(ticker).history(period="7d")
             if len(hist) >= 2:
-                prev = hist["Close"].iloc[-2]
-                curr = hist["Close"].iloc[-1]
+                closes = hist["Close"].tolist()
+                prev = closes[-2]
+                curr = closes[-1]
                 chg  = ((curr - prev) / prev) * 100
-                result[name] = {"price": round(curr, 2), "chg": round(chg, 2), "up": chg >= 0}
+                up   = chg >= 0
+                result[name] = {
+                    "price": round(curr, 2), "chg": round(chg, 2), "up": up,
+                    "sparkline": make_sparkline_svg(closes[-6:], up),
+                }
         except Exception:
             pass
     return result
@@ -449,6 +519,32 @@ def nim_chat_json(system_prompt: str, user_message: str, temperature: float, max
         return nim_client.chat.completions.create(**kwargs)
 
 
+def cached_llm_call(cache_key: tuple, compute_fn, ttl: int = 1800):
+    """
+    Session-scoped cache for LLM text-generation results, keyed by whatever
+    inputs actually determine the output. Deliberately implemented as a
+    thin wrapper around each call site's EXISTING body (see call_script /
+    call_news_topic / call_misc) rather than restructuring the surrounding
+    parallel-call orchestration — that orchestration took several rounds to
+    get right, so this only touches what's inside each function, not how
+    or when they're invoked. If the exact same city/topics/language/quote/
+    word/weather combination is requested again within `ttl` seconds, the
+    cached text is returned instantly with no new API call.
+    """
+    if "llm_content_cache" not in st.session_state:
+        st.session_state.llm_content_cache = {}
+    cache = st.session_state.llm_content_cache
+    entry = cache.get(cache_key)
+    if entry and (time.time() - entry[0] < ttl):
+        return entry[1]
+    result = compute_fn()
+    cache[cache_key] = (time.time(), result)
+    if len(cache) > 200:  # simple bound so a long session doesn't grow unbounded
+        oldest_key = min(cache, key=lambda k: cache[k][0])
+        del cache[oldest_key]
+    return result
+
+
 def elevenlabs_tts(text: str, voice_id: str):
     if not ELEVENLABS_KEY:
         return None
@@ -581,6 +677,31 @@ Return a JSON object with EXACTLY these keys:
 """
 
 
+def build_relevance_prompt(keyed_headlines: dict) -> str:
+    """
+    Optional add-on prompt: one short "why this matters" sentence per
+    live-fetched headline, keyed by a stable "Topic-index" string so the
+    result can be matched back to the exact card it came from regardless
+    of response ordering.
+    """
+    items_block = "\n".join(f'- [{key}] {headline}' for key, headline in keyed_headlines.items())
+    keys_example = ",\n  ".join(f'"{key}": "…"' for key in keyed_headlines.keys())
+    return f"""
+You explain why news headlines matter to an everyday reader, in ONE short
+sentence each (under 20 words). Be concrete — connect it to a real-world
+effect, not a vague generality like "this is important."
+
+HEADLINES:
+{items_block}
+
+Return ONLY valid JSON — no markdown fences, no preamble, no reasoning or <think> tags.
+Return a JSON object with EXACTLY these keys (use the bracketed keys exactly as given):
+{{
+  {keys_example}
+}}
+"""
+
+
 # ═══════════════════════════════════════════════════
 # LOADER — colors via CSS vars (theme-independent)
 # ═══════════════════════════════════════════════════
@@ -673,8 +794,31 @@ html,body,[class*="css"] { font-family:'Inter',sans-serif !important; color:var(
 }
 body:has(#dmchk:checked) .dm-label::after { content:'☀️'; transform:translateX(28px); }
 
+/* ── FONT-SIZE ACCESSIBILITY CONTROL ── */
+html { font-size:16px; transition:font-size 0.2s ease; }
+html:has(#fsSmall:checked) { font-size:14px; }
+html:has(#fsLarge:checked) { font-size:18px; }
+#fsSmall, #fsNormal, #fsLarge { display:none; }
+.fs-toggle {
+    position:fixed; top:1.1rem; right:5.2rem; z-index:99999;
+    display:flex; gap:2px; background:var(--card-bg);
+    border:1.5px solid var(--card-bdr); border-radius:999px; padding:3px;
+    backdrop-filter:blur(10px); box-shadow:0 4px 14px rgba(0,0,0,0.1);
+}
+.fs-btn {
+    width:26px; height:24px; display:flex; align-items:center; justify-content:center;
+    border-radius:999px; font-size:0.7rem; font-weight:800; cursor:pointer;
+    color:var(--text-muted); transition:all 0.2s ease;
+}
+#fsSmall:checked ~ label[for="fsSmall"],
+#fsNormal:checked ~ label[for="fsNormal"],
+#fsLarge:checked ~ label[for="fsLarge"] {
+    background:#D97757; color:#fff;
+}
+
 /* ── ORBS ── */
-.sati-bg { position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden; }
+.sati-bg { position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;animation:ambientHue 60s linear infinite; }
+@keyframes ambientHue { 0%{filter:hue-rotate(0deg)} 50%{filter:hue-rotate(8deg)} 100%{filter:hue-rotate(0deg)} }
 .orb { position:absolute;border-radius:50%;filter:blur(80px);opacity:0.3;animation:drift 16s ease-in-out infinite alternate; }
 .orb1 { width:520px;height:520px;background:#F0C4A8;top:-140px;left:-140px; }
 .orb2 { width:440px;height:440px;background:#FBCFE8;top:240px;right:-140px;animation-delay:4s; }
@@ -809,7 +953,13 @@ details { background:var(--card-bg) !important;border-radius:16px !important;bor
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 @keyframes dotPop { from{transform:scale(0.3);opacity:0} to{transform:scale(1);opacity:1} }
 @keyframes loaderFadeIn { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
-.loader-wrap { border-radius:26px;padding:3rem 2.5rem;text-align:center;max-width:540px;margin:2rem auto;box-shadow:0 24px 60px rgba(0,0,0,0.22);animation:loaderFadeIn 0.4s ease both;border:1.5px solid rgba(232,146,124,0.2);background:var(--loader-bg); }
+.loader-wrap { border-radius:26px;padding:3rem 2.5rem;text-align:center;max-width:540px;margin:2rem auto;box-shadow:0 24px 60px rgba(0,0,0,0.22);animation:loaderFadeIn 0.4s ease both;border:1.5px solid rgba(232,146,124,0.2);background:var(--loader-bg);position:relative;overflow:hidden; }
+.loader-wrap::after {
+    content:''; position:absolute; top:0; left:-150%; width:100%; height:100%;
+    background:linear-gradient(100deg, transparent, rgba(217,119,87,0.08), transparent);
+    animation:loaderSweep 2.2s ease-in-out infinite;
+}
+@keyframes loaderSweep { to { left:150%; } }
 .loader-emoji { font-size:3.2rem;display:block;margin-bottom:0.9rem;animation:loaderBounce 1.3s ease-in-out infinite; }
 .loader-title { font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:0.3rem;color:var(--loader-title); }
 .loader-sub { font-size:0.83rem;font-weight:600;margin-bottom:1.5rem;color:var(--loader-sub); }
@@ -935,6 +1085,7 @@ body:has(#dmchk:checked) .dl-wrap a { color:#F0C4A8; }
     transition:transform 0.25s ease, box-shadow 0.25s ease;
 }
 .market-chip:hover { transform:translateY(-4px);box-shadow:0 12px 28px rgba(217,119,87,0.15); }
+.market-spark { margin-top:0.4rem; opacity:0.85; }
 .market-name { font-size:0.68rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-muted); }
 .market-price { font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--text-main);margin:0.15rem 0; }
 .market-chg-up { font-size:0.82rem;font-weight:700;color:#10B981; }
@@ -1111,6 +1262,35 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 }
 
 .book-dots { display:flex; justify-content:center; align-items:center; gap:8px; margin:0.9rem 0 0.6rem; }
+.cross-ref-hint {
+    max-width:600px; margin:-0.4rem auto 0.8rem; text-align:center;
+    font-size:0.76rem; color:var(--text-muted); font-style:italic;
+    background:rgba(217,119,87,0.06); border-radius:8px; padding:0.4rem 0.8rem;
+}
+.cross-ref-hint strong { color:#C26847; font-style:normal; }
+.relevance-hint {
+    max-width:600px; margin:-0.4rem auto 0.8rem; text-align:left;
+    font-size:0.8rem; color:var(--text-sub); line-height:1.5;
+    background:rgba(16,185,129,0.07); border-left:3px solid #10B981;
+    border-radius:6px; padding:0.5rem 0.9rem;
+}
+.relevance-hint strong { color:#047857; }
+
+/* ── ONBOARDING BANNER — pure CSS dismiss, same pattern as dark mode toggle ── */
+#onboardDismiss { display:none; }
+.onboarding-banner {
+    max-width:700px; margin:0 auto 1.5rem; display:flex; align-items:center;
+    gap:14px; background:rgba(217,119,87,0.08); border:1.5px solid rgba(217,119,87,0.25);
+    border-radius:14px; padding:0.9rem 1.3rem; animation:fadeSlideDown 0.6s ease both;
+}
+.onboarding-text { font-size:0.85rem; color:var(--text-sub); line-height:1.5; flex:1; }
+.onboarding-dismiss {
+    flex-shrink:0; cursor:pointer; font-size:0.75rem; font-weight:700;
+    color:#D97757; border:1.5px solid rgba(217,119,87,0.4); border-radius:999px;
+    padding:0.35rem 0.9rem; white-space:nowrap; transition:all 0.2s ease;
+}
+.onboarding-dismiss:hover { background:#D97757; color:#fff; }
+#onboardDismiss:checked ~ .onboarding-banner { display:none; }
 .book-dot { width:5px; height:5px; border-radius:50%; background:rgba(139,58,31,0.3); transition:all 0.25s ease; }
 .book-dot-active { background:#8B3A1F; width:5px; transform:scale(1.8); }
 
@@ -1152,6 +1332,22 @@ st.markdown(CSS, unsafe_allow_html=True)
 # Pure-CSS dark toggle — clicking it triggers NO Streamlit rerun.
 st.markdown('<input type="checkbox" id="dmchk"><label for="dmchk" class="dm-label"></label>', unsafe_allow_html=True)
 
+# Pure-CSS font-size control (A⁻/A/A⁺) — same no-rerun technique as dark
+# mode. Scales the ROOT font-size, which every existing "rem" measurement
+# in the app is relative to, so it cascades everywhere with zero need to
+# touch individual font-size declarations.
+st.markdown(
+    '<div class="fs-toggle">'
+    '<input type="radio" name="fontsize" id="fsSmall">'
+    '<input type="radio" name="fontsize" id="fsNormal" checked>'
+    '<input type="radio" name="fontsize" id="fsLarge">'
+    '<label for="fsSmall" class="fs-btn">A⁻</label>'
+    '<label for="fsNormal" class="fs-btn">A</label>'
+    '<label for="fsLarge" class="fs-btn">A⁺</label>'
+    '</div>',
+    unsafe_allow_html=True
+)
+
 st.markdown(
     '<div class="sati-bg"><div class="orb orb1"></div><div class="orb orb2"></div>'
     '<div class="orb orb3"></div><div class="orb orb4"></div></div>',
@@ -1167,7 +1363,7 @@ def sep():
     )
 
 
-def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key=""):
+def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key="", cross_refs=None, relevance_map=None):
     st.markdown(
         f'<div class="sati-section">'
         f'<div class="section-header">'
@@ -1217,6 +1413,28 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
         f'{src_html}</div></div></div>',
         unsafe_allow_html=True
     )
+
+    # Cross-reference hint — a soft, best-effort "possibly related" note,
+    # pure keyword-overlap heuristic, never claiming certainty.
+    if cross_refs:
+        related = cross_refs.get((section_key, idx))
+        if related:
+            other_topic, _, other_headline = related[0]
+            st.markdown(
+                f'<div class="cross-ref-hint">🔗 Possibly related — '
+                f'<strong>{other_topic}</strong>: {other_headline}</div>',
+                unsafe_allow_html=True
+            )
+
+    # "Why this matters" — only present when the user opted in and this
+    # specific item was a live-fetched headline covered by that call.
+    if relevance_map:
+        explanation = relevance_map.get(f"{section_key}-{idx}")
+        if explanation:
+            st.markdown(
+                f'<div class="relevance-hint">💡 <strong>Why it matters:</strong> {explanation}</div>',
+                unsafe_allow_html=True
+            )
 
     # Page-turn controls — newspaper-style "turn the page" links with full
     # text labels (guaranteed to render, unlike a lone glyph that could
@@ -1353,6 +1571,18 @@ def render_result(res: dict):
             return live, live_tag
         return payload.get(payload_key, []), ""
 
+    # Compute cross-topic story relationships ONCE, across every topic the
+    # user selected — pure Python, no extra API call. news_section() looks
+    # up (topic, idx) in this dict to show a "possibly related" hint.
+    _all_items_by_topic = {}
+    for _topic_name, _payload_key in [("National", "india_news"), ("Global", "global_news"), ("Tech", "tech_news")]:
+        if _topic_name in topics:
+            _items, _ = items_for(_topic_name, _payload_key)
+            if _items:
+                _all_items_by_topic[_topic_name] = _items
+    cross_refs = find_cross_references(_all_items_by_topic)
+    relevance_map = res.get("relevance_map") or {}
+
     def render_market():
         if not markets_data:
             return
@@ -1367,33 +1597,35 @@ def render_result(res: dict):
         for name, md in markets_data.items():
             cls = "market-chg-up" if md["up"] else "market-chg-down"
             arrow = "▲" if md["up"] else "▼"
+            spark = md.get("sparkline", "")
             chips += (
                 f'<div class="market-chip"><div class="market-name">{name}</div>'
                 f'<div class="market-price">{md["price"]:,.1f}</div>'
-                f'<div class="{cls}">{arrow} {abs(md["chg"])}%</div></div>'
+                f'<div class="{cls}">{arrow} {abs(md["chg"])}%</div>'
+                f'<div class="market-spark">{spark}</div></div>'
             )
         st.markdown(f'<div class="market-strip">{chips}</div>', unsafe_allow_html=True)
 
     def render_national():
         sep()
         items, badge = items_for("National", "india_news")
-        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge, "National")
+        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge, "National", cross_refs, relevance_map)
 
     def render_global():
         sep()
         items, badge = items_for("Global", "global_news")
-        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge, "Global")
+        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge, "Global", cross_refs, relevance_map)
 
     def render_tech():
         sep()
         items, badge = items_for("Tech", "tech_news")
-        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge, "Tech")
+        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge, "Tech", cross_refs, relevance_map)
 
     def render_sports():
         items, badge = items_for("Sports", "sports_flash")
         if items:
             sep()
-            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge, "Sports")
+            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge, "Sports", cross_refs, relevance_map)
 
     def render_learning():
         if not payload.get("learning_byte"):
@@ -1493,11 +1725,23 @@ def render_result(res: dict):
 
     # ── DOWNLOAD TEXT BRIEF ──
     brief_txt = build_text_export(res)
-    st.download_button(
-        "⬇️ Download Brief as Text", data=brief_txt,
-        file_name=f"saticast_{datetime.now().strftime('%Y%m%d')}.txt",
-        mime="text/plain", key="dl_brief_txt"
-    )
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            "⬇️ Download as Text", data=brief_txt,
+            file_name=f"saticast_{datetime.now().strftime('%Y%m%d')}.txt",
+            mime="text/plain", key="dl_brief_txt", use_container_width=True
+        )
+    with dl_col2:
+        pdf_bytes, pdf_err = build_pdf_export(res)
+        if pdf_bytes:
+            st.download_button(
+                "📰 Download as PDF", data=pdf_bytes,
+                file_name=f"saticast_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf", key="dl_brief_pdf", use_container_width=True
+            )
+        elif pdf_err:
+            st.caption(f"📄 PDF export unavailable: {pdf_err}")
 
     # ── FOOTER ──
     time_str = f' · {listen_time}' if listen_time else ''
@@ -1535,6 +1779,81 @@ def build_text_export(res: dict) -> str:
     return "\n".join(lines)
 
 
+def build_pdf_export(res: dict):
+    """
+    Newspaper-style PDF of the brief, using fpdf2 — pure Python, no system
+    dependencies (unlike weasyprint), so it's safe to add to a Streamlit
+    Cloud deployment. Returns (pdf_bytes, None) on success, or
+    (None, error_message) if fpdf2 isn't installed.
+    """
+    try:
+        from fpdf import FPDF
+        from fpdf.enums import XPos, YPos
+    except ImportError:
+        return None, "fpdf2 isn't installed — add 'fpdf2' to requirements.txt to enable PDF export."
+
+    p = res["payload"]
+
+    def clean(s: str) -> str:
+        # fpdf2's built-in fonts are latin-1 only; keep this safe by
+        # stripping anything outside that range (emoji, exotic punctuation).
+        return (s or "").encode("latin-1", "ignore").decode("latin-1")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Times", "B", 26)
+    pdf.cell(0, 12, "SATICAST", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+    pdf.set_font("Times", "I", 10)
+    pdf.cell(0, 6, clean(f"{res.get('gen_date','')} - {res['city']} - {res['lang']}"),
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+    pdf.ln(4)
+    pdf.set_draw_color(139, 58, 31)
+    pdf.set_line_width(0.6)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(6)
+
+    pdf.set_font("Times", "", 12)
+    pdf.multi_cell(0, 7, clean(p.get("greeting", "")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(4)
+
+    for key, title in [("india_news", "NATIONAL INTEL"), ("global_news", "GLOBAL OVERVIEW"), ("tech_news", "TECH & ARCHITECTURE")]:
+        items = p.get(key) or res.get(f"{key.split('_')[0]}_live") or []
+        if not items:
+            continue
+        pdf.set_font("Times", "B", 14)
+        pdf.cell(0, 8, clean(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        for i, item in enumerate(items, 1):
+            pdf.set_font("Times", "B", 11)
+            pdf.multi_cell(0, 6, clean(f"{i}. {item.get('headline','')}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Times", "", 10)
+            pdf.multi_cell(0, 5.5, clean(item.get("detail", "")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            src = item.get("source", "")
+            if src:
+                pdf.set_font("Times", "I", 9)
+                pdf.cell(0, 5, clean(f"-- {src}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.ln(2)
+        pdf.ln(2)
+
+    q = res.get("quote", {})
+    if q.get("quote"):
+        pdf.set_font("Times", "BI", 12)
+        pdf.multi_cell(0, 7, clean(f'"{q["quote"]}"'), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Times", "", 10)
+        pdf.cell(0, 6, clean(f"-- {q.get('author','')}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(4)
+
+    w = res.get("word", {})
+    if w.get("word"):
+        pdf.set_font("Times", "BI", 13)
+        pdf.cell(0, 7, clean(f"Word of the Day: {w['word']}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Times", "", 10)
+        pdf.multi_cell(0, 5.5, clean(w.get("definition", "")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    return bytes(pdf.output()), None
+
+
 # ═══════════════════════════════════════════════════
 # MASTHEAD
 # ═══════════════════════════════════════════════════
@@ -1547,6 +1866,21 @@ st.markdown(
     '<div class="waveform-wrap">'
     + '<div class="bar"></div>' * 16 +
     '</div></div>',
+    unsafe_allow_html=True
+)
+
+# First-time onboarding banner — pure CSS dismiss (same zero-rerun checkbox
+# technique as the dark-mode toggle), so there's no button-sizing fight and
+# no extra script rerun just to hide a hint. Resets on a fresh page load,
+# which is a reasonable scope for a lightweight "new here?" hint.
+st.markdown(
+    '<input type="checkbox" id="onboardDismiss">'
+    '<div class="onboarding-banner">'
+    '<div class="onboarding-text">👋 <strong>New here?</strong> Pick your voice, city, and topics '
+    'below, then hit <strong>Generate Morning Brief</strong>. Use 🌙/☀️ (top-right) for dark mode, '
+    'and A⁻ / A / A⁺ for text size.</div>'
+    '<label for="onboardDismiss" class="onboarding-dismiss">Got it ✕</label>'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -1616,6 +1950,11 @@ with c4:
 with c5:
     generate_audio = st.toggle("🎧 Generate Audio", value=True, key="pref_audio",
                                help="Turn off to skip voice generation — text brief appears much faster.")
+
+explain_relevance = st.toggle(
+    "💡 Explain why each live headline matters", value=False, key="pref_relevance",
+    help="Adds one extra AI-generated sentence per LIVE headline (requires NEWS_API_KEY) — off by default since it adds one more parallel call."
+)
 
 your_name = st.text_input("👤 Your Name (optional — personalizes the greeting)",
                           placeholder="e.g. Pranay", key="pref_name")
@@ -1719,10 +2058,16 @@ if trigger:
         needs_misc_call = need_weather_summary or need_learning
 
         def call_script(user_message: str, max_words_hint: str = ""):
-            sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line, your_name)
-            msg = user_message + (f"\n\nIMPORTANT: {max_words_hint}" if max_words_hint else "")
-            c = nim_chat_json(sys_prompt, msg, temperature=0.3, max_tokens=1800)
-            return safe_parse_llm_json(c.choices[0].message.content)
+            cache_key = ("script", lang_code, news_ctx, quote_line, word_line,
+                        weather_line, your_name, user_message, max_words_hint)
+
+            def _compute():
+                sys_prompt = build_script_prompt(lang_code, news_ctx, quote_line, word_line, weather_line, your_name)
+                msg = user_message + (f"\n\nIMPORTANT: {max_words_hint}" if max_words_hint else "")
+                c = nim_chat_json(sys_prompt, msg, temperature=0.3, max_tokens=1800)
+                return safe_parse_llm_json(c.choices[0].message.content)
+
+            return cached_llm_call(cache_key, _compute)
 
         def call_news_topic(topic_name: str) -> dict:
             """
@@ -1730,31 +2075,66 @@ if trigger:
             so it can never get truncated to 1 item by a shared budget.
             Retries once (smaller ask) if the first attempt is malformed.
             """
-            sys_prompt = build_news_topic_prompt(topic_name)
-            msg = f"{user_ctx}\nGenerate the 5 {topic_name} news items now."
-            c = nim_chat_json(sys_prompt, msg, temperature=0.4, max_tokens=1200)
-            try:
-                return safe_parse_llm_json(c.choices[0].message.content)
-            except Exception:
-                # Retry once, even more tightly scoped
-                c2 = nim_chat_json(
-                    sys_prompt, msg + " Keep each 'detail' under 15 words.",
-                    temperature=0.3, max_tokens=1200
-                )
-                return safe_parse_llm_json(c2.choices[0].message.content)
+            cache_key = ("news_topic", topic_name, user_ctx)
+
+            def _compute():
+                sys_prompt = build_news_topic_prompt(topic_name)
+                msg = f"{user_ctx}\nGenerate the 5 {topic_name} news items now."
+                c = nim_chat_json(sys_prompt, msg, temperature=0.4, max_tokens=1200)
+                try:
+                    return safe_parse_llm_json(c.choices[0].message.content)
+                except Exception:
+                    # Retry once, even more tightly scoped
+                    c2 = nim_chat_json(
+                        sys_prompt, msg + " Keep each 'detail' under 15 words.",
+                        temperature=0.3, max_tokens=1200
+                    )
+                    return safe_parse_llm_json(c2.choices[0].message.content)
+
+            return cached_llm_call(cache_key, _compute)
 
         def call_misc(user_message: str) -> dict:
-            sys_prompt = build_misc_prompt(need_weather_summary, need_learning, learning_topic)
-            c = nim_chat_json(sys_prompt, user_message, temperature=0.3, max_tokens=900)
-            return safe_parse_llm_json(c.choices[0].message.content)
+            cache_key = ("misc", need_weather_summary, need_learning, learning_topic, user_message)
+
+            def _compute():
+                sys_prompt = build_misc_prompt(need_weather_summary, need_learning, learning_topic)
+                c = nim_chat_json(sys_prompt, user_message, temperature=0.3, max_tokens=900)
+                return safe_parse_llm_json(c.choices[0].message.content)
+
+            return cached_llm_call(cache_key, _compute)
+
+        # Build the keyed-headline set for the OPTIONAL relevance call, using
+        # only live-fetched items (the AI-generated ones aren't known until
+        # after this same parallel batch completes, so they're out of scope
+        # for this pass — see build_relevance_prompt's docstring).
+        relevance_keyed_headlines = {}
+        if explain_relevance:
+            for _disp_name, _api_key in NEWS_TOPIC_MAP.items():
+                for _i, _item in enumerate(live_news.get(_api_key, [])):
+                    if _item.get("headline"):
+                        relevance_keyed_headlines[f"{_disp_name}-{_i}"] = _item["headline"]
+
+        def call_relevance(keyed_headlines: dict) -> dict:
+            cache_key = ("relevance", tuple(sorted(keyed_headlines.items())))
+
+            def _compute():
+                sys_prompt = build_relevance_prompt(keyed_headlines)
+                c = nim_chat_json(sys_prompt, "Explain each headline now.", temperature=0.4, max_tokens=900)
+                return safe_parse_llm_json(c.choices[0].message.content)
+
+            return cached_llm_call(cache_key, _compute)
 
         slot.markdown(render_loader(2), unsafe_allow_html=True)
 
-        # ── LAUNCH SCRIPT + ONE CALL PER MISSING NEWS TOPIC + MISC — ALL IN PARALLEL ──
-        with ThreadPoolExecutor(max_workers=max(3, len(llm_news_topics) + 2)) as ex:
+        # ── LAUNCH SCRIPT + ONE CALL PER MISSING NEWS TOPIC + MISC + OPTIONAL RELEVANCE — ALL IN PARALLEL ──
+        with ThreadPoolExecutor(max_workers=max(4, len(llm_news_topics) + 3)) as ex:
             fut_script = ex.submit(call_script, user_ctx)
             fut_news   = {t: ex.submit(call_news_topic, t) for t in llm_news_topics}
             fut_misc   = ex.submit(call_misc, user_ctx) if needs_misc_call else None
+            fut_relevance = (
+                ex.submit(call_relevance, relevance_keyed_headlines)
+                if relevance_keyed_headlines else None
+            )
 
             # Script result feeds TTS — grab it first, with a repair-retry inline.
             try:
@@ -1801,6 +2181,13 @@ if trigger:
                 except Exception:
                     pass
 
+            relevance_map = {}
+            if fut_relevance is not None:
+                try:
+                    relevance_map = fut_relevance.result(timeout=45)
+                except Exception:
+                    pass  # relevance is a nice-to-have — silently skip on failure
+
             audio_bytes = tts_future.result() if tts_future is not None else None
 
         payload = {**visual_payload, **script_payload}
@@ -1824,6 +2211,7 @@ if trigger:
             "weather":     weather_data,
             "markets":     markets_data,
             "on_this_day": on_this_day,
+            "relevance_map": relevance_map,
             "india_live":  live_news["india"],
             "global_live": live_news["global"],
             "tech_live":   live_news["tech"],
