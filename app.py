@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import json
 import io
+import os
 import re
 import time
 import base64
@@ -11,6 +12,39 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from gtts import gTTS
+
+# ═══════════════════════════════════════════════════
+# UNIFIED SETTINGS — shared with SanghaStatus
+# ═══════════════════════════════════════════════════
+# A single small JSON file both apps read/write, so entering your name once
+# in either app pre-fills it in the other. CAVEAT (same as SanghaStatus's
+# history file): this only actually shares state when both apps run on the
+# same server filesystem — e.g. two entry-point scripts in one Streamlit
+# Cloud deployment, or side-by-side locally. Two apps deployed as separate
+# Streamlit Cloud projects each get their own isolated disk, so on that
+# setup this degrades gracefully to "remembers your name within this app
+# only" (identical to how it already behaved before this feature).
+SHARED_SETTINGS_FILE = ".sati_sangha_shared_settings.json"
+
+
+def load_shared_settings() -> dict:
+    try:
+        if os.path.exists(SHARED_SETTINGS_FILE):
+            with open(SHARED_SETTINGS_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_shared_settings(updates: dict) -> None:
+    try:
+        current = load_shared_settings()
+        current.update(updates)
+        with open(SHARED_SETTINGS_FILE, "w") as f:
+            json.dump(current, f)
+    except Exception:
+        pass  # read-only filesystem or other issue — fail silently
 
 try:
     import yfinance as yf
@@ -29,10 +63,40 @@ st.set_page_config(
 )
 
 # ═══════════════════════════════════════════════════
-# SESSION STATE
+# SESSION STATE — brief history now backed by disk (metadata only, no
+# audio, to keep the file small) so it survives across days/sessions
+# instead of resetting on every browser refresh. Same shared-file caveat
+# as SanghaStatus's history: one file for the whole deployment, not
+# per-user.
 # ═══════════════════════════════════════════════════
+BRIEF_HISTORY_FILE = ".saticast_brief_history.json"
+
+
+def load_brief_history() -> list:
+    try:
+        if os.path.exists(BRIEF_HISTORY_FILE):
+            with open(BRIEF_HISTORY_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def save_brief_history(history: list) -> None:
+    try:
+        # Never persist audio_b64 to disk — it's large and only needed for
+        # the current session's instant-replay; the on-disk copy is for the
+        # 7-day glance-back list (date/city/topics), not for replaying audio
+        # from a previous session.
+        slim = [{k: v for k, v in e.items() if k != "audio_b64"} for e in history]
+        with open(BRIEF_HISTORY_FILE, "w") as f:
+            json.dump(slim[:7], f)
+    except Exception:
+        pass
+
+
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = load_brief_history()
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
 
@@ -198,6 +262,47 @@ def find_cross_references(items_by_topic: dict, min_shared: int = 2) -> dict:
     return refs
 
 # ═══════════════════════════════════════════════════
+# OFFLINE / STALE FALLBACK
+# ═══════════════════════════════════════════════════
+# Whenever a live fetch actually succeeds, its result is also written to a
+# small on-disk snapshot file. If a later call fails (API down, rate-limited,
+# network blip) and returns empty, the caller falls back to that last-known-
+# good snapshot instead of showing a blank section — clearly labeled as
+# stale so it's never mistaken for live data. This is a graceful degrade,
+# not a substitute for the real fetch, and (like the other on-disk files in
+# this app) it's shared across the deployment's visitors, not per-user.
+STALE_CACHE_FILE = ".saticast_stale_snapshot.json"
+
+
+def _load_stale_cache() -> dict:
+    try:
+        if os.path.exists(STALE_CACHE_FILE):
+            with open(STALE_CACHE_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_stale_snapshot(key: str, value) -> None:
+    try:
+        cache = _load_stale_cache()
+        cache[key] = {"value": value, "saved_at": datetime.now().isoformat()}
+        with open(STALE_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+
+def _get_stale_snapshot(key: str):
+    """Returns (value, saved_at_str) or (None, None) if nothing is cached."""
+    entry = _load_stale_cache().get(key)
+    if not entry:
+        return None, None
+    return entry.get("value"), entry.get("saved_at")
+
+
+# ═══════════════════════════════════════════════════
 # LIVE DATA HELPERS
 # ═══════════════════════════════════════════════════
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -210,7 +315,7 @@ def fetch_weather(city: str) -> dict:
         r = requests.get(url, timeout=6)
         if r.status_code == 200:
             d = r.json()
-            return {
+            result = {
                 "temp":     round(d["main"]["temp"]),
                 "feels":    round(d["main"]["feels_like"]),
                 "humidity": d["main"]["humidity"],
@@ -218,8 +323,13 @@ def fetch_weather(city: str) -> dict:
                 "wind":     round(d["wind"]["speed"] * 3.6, 1),
                 "icon":     d["weather"][0]["main"],
             }
+            _save_stale_snapshot(f"weather_{city.lower()}", result)
+            return result
     except Exception:
         pass
+    stale, saved_at = _get_stale_snapshot(f"weather_{city.lower()}")
+    if stale:
+        return {**stale, "_stale": True, "_stale_since": saved_at}
     return {}
 
 
@@ -245,7 +355,7 @@ def fetch_news(topic: str, page_size: int = 5) -> list:
                 r2 = requests.get(url, timeout=6)
                 if r2.status_code == 200:
                     articles = r2.json().get("articles", [])
-            return [
+            result = [
                 {
                     "headline": a.get("title", "").split(" - ")[0][:90],
                     "detail":   a.get("description", "") or "",
@@ -255,8 +365,14 @@ def fetch_news(topic: str, page_size: int = 5) -> list:
                 for a in articles
                 if a.get("title") and "[Removed]" not in a.get("title", "")
             ][:page_size]
+            if result:
+                _save_stale_snapshot(f"news_{topic}", result)
+            return result
     except Exception:
         pass
+    stale, saved_at = _get_stale_snapshot(f"news_{topic}")
+    if stale:
+        return [{**item, "_stale": True, "_stale_since": saved_at} for item in stale]
     return []
 
 
@@ -285,11 +401,16 @@ def make_sparkline_svg(values: list, up: bool) -> str:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_markets() -> dict:
+def fetch_markets(extra_tickers_tuple: tuple = ()) -> dict:
+    """extra_tickers_tuple: tuple of (display_name, yahoo_symbol) pairs from
+    the user's personal watchlist, appended after the default index set.
+    A tuple (not a dict) so the cache key stays hashable."""
     if not YFINANCE_OK:
         return {}
     result = {}
-    for name, ticker in MARKET_TICKERS.items():
+    all_tickers = dict(MARKET_TICKERS)
+    all_tickers.update(dict(extra_tickers_tuple))
+    for name, ticker in all_tickers.items():
         try:
             hist = yf.Ticker(ticker).history(period="7d")
             if len(hist) >= 2:
@@ -324,38 +445,81 @@ def fetch_on_this_day() -> dict:
     return {}
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_quote_of_day() -> dict:
-    try:
-        r = requests.get("https://zenquotes.io/api/today", timeout=6)
-        if r.status_code == 200:
-            data = r.json()
-            if data and isinstance(data, list):
-                q = data[0]
-                return {"quote": q.get("q", ""), "author": q.get("a", "Unknown"),
-                        "source": "ZenQuotes", "source_url": "https://zenquotes.io"}
-    except Exception:
-        pass
-    try:
-        r = requests.get("https://api.quotable.io/random?minLength=60&maxLength=180", timeout=6)
-        if r.status_code == 200:
-            d = r.json()
-            return {"quote": d.get("content", ""), "author": d.get("author", "Unknown"),
-                    "source": "Quotable.io", "source_url": "https://quotable.io"}
-    except Exception:
-        pass
-    pool = [
+# ── Quote "vibes" — pick a mood and get a quote curated for it.
+# ZenQuotes' free tier only exposes a single "today" pick (no category
+# filter), so "Mindful" uses that live feed and the other vibes draw from
+# hand-curated local pools — still deterministic-per-day (indexed by
+# day-of-year) so refreshing mid-day doesn't change the quote underfoot.
+QUOTE_VIBES = {
+    "🧘 Mindful":     "mindful",
+    "🔥 Motivational": "motivational",
+    "🏛 Stoic":        "stoic",
+    "😄 Light & Fun":  "fun",
+}
+
+_VIBE_POOLS = {
+    "motivational": [
+        {"quote": "The secret of getting ahead is getting started.", "author": "Mark Twain"},
+        {"quote": "Focus on being productive instead of busy.", "author": "Tim Ferriss"},
+        {"quote": "It does not matter how slowly you go as long as you do not stop.", "author": "Confucius"},
+        {"quote": "Your mind is for having ideas, not holding them.", "author": "David Allen"},
+        {"quote": "Small daily improvements are the key to staggering long-term results.", "author": "Robin Sharma"},
+        {"quote": "Discipline is choosing between what you want now and what you want most.", "author": "Abraham Lincoln"},
+        {"quote": "The way to get started is to quit talking and begin doing.", "author": "Walt Disney"},
+        {"quote": "Energy and persistence conquer all things.", "author": "Benjamin Franklin"},
+    ],
+    "stoic": [
+        {"quote": "You have power over your mind — not outside events. Realize this, and you will find strength.", "author": "Marcus Aurelius"},
+        {"quote": "He who is not satisfied with a little, is satisfied with nothing.", "author": "Epicurus"},
+        {"quote": "First say to yourself what you would be; and then do what you have to do.", "author": "Epictetus"},
+        {"quote": "No man is free who is not master of himself.", "author": "Epictetus"},
+        {"quote": "Waste no more time arguing about what a good man should be. Be one.", "author": "Marcus Aurelius"},
+        {"quote": "The obstacle in the path becomes the path. Never forget, within every obstacle is an opportunity.", "author": "Ryan Holiday"},
+        {"quote": "It is not that we have a short time to live, but that we waste a lot of it.", "author": "Seneca"},
+    ],
+    "fun": [
+        {"quote": "I'm not superstitious, but I am a little stitious.", "author": "Michael Scott"},
+        {"quote": "Coffee: because adulting is hard.", "author": "Unknown"},
+        {"quote": "I used to think I was indecisive, but now I'm not too sure.", "author": "Unknown"},
+        {"quote": "The trouble with having an open mind is that people keep coming along and sticking things into it.", "author": "Terry Pratchett"},
+        {"quote": "I am not lazy. I am on energy-saving mode.", "author": "Unknown"},
+        {"quote": "Do or do not. There is no 'try'.", "author": "Yoda"},
+        {"quote": "Life is short. Smile while you still have teeth.", "author": "Unknown"},
+    ],
+    "mindful": [
         {"quote": "The present moment is the only moment available to us, and it is the door to all moments.", "author": "Thich Nhat Hanh"},
         {"quote": "Wherever you are, be all there.", "author": "Jim Elliot"},
         {"quote": "Do not dwell in the past, do not dream of the future, concentrate the mind on the present moment.", "author": "Buddha"},
         {"quote": "Almost everything will work again if you unplug it for a few minutes — including you.", "author": "Anne Lamott"},
-        {"quote": "It does not matter how slowly you go as long as you do not stop.", "author": "Confucius"},
         {"quote": "Simplicity is the ultimate sophistication.", "author": "Leonardo da Vinci"},
-        {"quote": "The secret of getting ahead is getting started.", "author": "Mark Twain"},
-        {"quote": "Focus on being productive instead of busy.", "author": "Tim Ferriss"},
-        {"quote": "Your mind is for having ideas, not holding them.", "author": "David Allen"},
         {"quote": "First, solve the problem. Then, write the code.", "author": "John Johnson"},
-    ]
+        {"quote": "Feelings come and go like clouds in a windy sky. Conscious breathing is my anchor.", "author": "Thich Nhat Hanh"},
+    ],
+}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_quote_of_day(vibe: str = "mindful") -> dict:
+    if vibe == "mindful":
+        try:
+            r = requests.get("https://zenquotes.io/api/today", timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                if data and isinstance(data, list):
+                    q = data[0]
+                    return {"quote": q.get("q", ""), "author": q.get("a", "Unknown"),
+                            "source": "ZenQuotes", "source_url": "https://zenquotes.io"}
+        except Exception:
+            pass
+        try:
+            r = requests.get("https://api.quotable.io/random?minLength=60&maxLength=180", timeout=6)
+            if r.status_code == 200:
+                d = r.json()
+                return {"quote": d.get("content", ""), "author": d.get("author", "Unknown"),
+                        "source": "Quotable.io", "source_url": "https://quotable.io"}
+        except Exception:
+            pass
+    pool = _VIBE_POOLS.get(vibe, _VIBE_POOLS["mindful"])
     e = pool[datetime.now().timetuple().tm_yday % len(pool)]
     return {"quote": e["quote"], "author": e["author"], "source": "SatiCast Daily Collection", "source_url": ""}
 
@@ -572,6 +736,51 @@ def weather_emoji(icon: str) -> str:
             "Fog": "🌫️"}.get(icon, "🌤️")
 
 
+def weather_icon_svg(icon: str, size: int = 46) -> str:
+    """Small animated inline-SVG weather icon (sun rays rotating, cloud
+    drifting) — a lighter-weight, more 'designed' alternative to a plain
+    emoji, with its own gentle CSS animation. Falls back to the emoji for
+    any condition not covered here."""
+    s = size
+    if icon == "Clear":
+        return (
+            f'<svg width="{s}" height="{s}" viewBox="0 0 48 48" class="wx-svg wx-svg-sun">'
+            f'<g class="wx-sun-spin"><circle cx="24" cy="24" r="9" fill="#F59E0B"/>'
+            + "".join(
+                f'<line x1="24" y1="{y1}" x2="24" y2="{y2}" stroke="#F59E0B" stroke-width="2.5" '
+                f'stroke-linecap="round" transform="rotate({ang} 24 24)"/>'
+                for ang, y1, y2 in [(a, 2, 8) for a in range(0, 360, 45)]
+            )
+            + '</g></svg>'
+        )
+    if icon in ("Clouds", "Mist", "Haze", "Fog"):
+        return (
+            f'<svg width="{s}" height="{s}" viewBox="0 0 48 48" class="wx-svg wx-svg-cloud">'
+            f'<g class="wx-cloud-drift">'
+            f'<ellipse cx="20" cy="28" rx="13" ry="9" fill="#94A3B8"/>'
+            f'<ellipse cx="30" cy="24" rx="10" ry="8" fill="#CBD5E1"/>'
+            f'</g></svg>'
+        )
+    if icon in ("Rain", "Drizzle", "Thunderstorm"):
+        return (
+            f'<svg width="{s}" height="{s}" viewBox="0 0 48 48" class="wx-svg wx-svg-rain">'
+            f'<ellipse cx="24" cy="19" rx="13" ry="9" fill="#94A3B8"/>'
+            f'<g class="wx-rain-drops">'
+            + "".join(f'<line x1="{x}" y1="30" x2="{x-3}" y2="40" stroke="#38BDF8" '
+                      f'stroke-width="2.2" stroke-linecap="round" class="wx-drop wx-drop-{i}"/>'
+                      for i, x in enumerate([16, 24, 32]))
+            + '</g></svg>'
+        )
+    if icon == "Snow":
+        return (
+            f'<svg width="{s}" height="{s}" viewBox="0 0 48 48" class="wx-svg">'
+            f'<ellipse cx="24" cy="19" rx="13" ry="9" fill="#CBD5E1"/>'
+            + "".join(f'<circle cx="{x}" cy="34" r="2" fill="#BAE6FD"/>' for x in [17, 24, 31])
+            + '</svg>'
+        )
+    return f'<span style="font-size:{s*0.75}px;">{weather_emoji(icon)}</span>'
+
+
 def todays_learning_topic() -> str:
     return LEARNING_TOPICS[datetime.now().timetuple().tm_yday % len(LEARNING_TOPICS)]
 
@@ -713,6 +922,17 @@ LOADER_STAGES = [
     ("✨", "Polishing your digest…",          "Final quality pass"),
 ]
 
+# Short, on-brand flavor lines that rotate client-side underneath the main
+# loader stage — pure CSS keyframes (no JS, no extra components.html), so
+# a slow stage doesn't just sit on one static sentence.
+LOADER_MICRO_COPY = [
+    "Steeping the news like tea…",
+    "Consulting the market oracles…",
+    "Untangling today's headlines…",
+    "Tuning the morning voice…",
+    "Finding today's quiet moment…",
+]
+
 def render_loader(stage_idx: int) -> str:
     total = len(LOADER_STAGES)
     emoji, title, sub = LOADER_STAGES[stage_idx]
@@ -721,15 +941,41 @@ def render_loader(stage_idx: int) -> str:
         f'<div class="ld {"ldone" if i < stage_idx else ("lactive" if i == stage_idx else "")}"></div>'
         for i in range(total)
     ])
+    skeleton = (
+        '<div class="skeleton-wrap">'
+        '<div class="skeleton-block skel-weather">'
+        '<div class="skel-shimmer skel-icon"></div>'
+        '<div class="skel-col"><div class="skel-shimmer skel-line skel-w60"></div>'
+        '<div class="skel-shimmer skel-line skel-w40"></div></div></div>'
+        + "".join(
+            '<div class="skeleton-block skel-section">'
+            '<div class="skel-shimmer skel-line skel-w30" style="height:1.1rem;margin-bottom:0.9rem;"></div>'
+            '<div class="skel-shimmer skel-line skel-w90"></div>'
+            '<div class="skel-shimmer skel-line skel-w75"></div>'
+            '<div class="skel-shimmer skel-line skel-w50"></div></div>'
+            for _ in range(3)
+        )
+        + '</div>'
+    )
+    n_micro = len(LOADER_MICRO_COPY)
+    slot_secs = 2.5
+    loop_secs = n_micro * slot_secs
+    micro_spans = "".join(
+        f'<span class="loader-micro-item" style="animation-duration:{loop_secs}s;'
+        f'animation-delay:-{i*slot_secs}s;">{line}</span>'
+        for i, line in enumerate(LOADER_MICRO_COPY)
+    )
     return (
         f'<div class="loader-wrap">'
         f'<div class="loader-emoji">{emoji}</div>'
         f'<div class="loader-title">{title}</div>'
         f'<div class="loader-sub">{sub} &nbsp;·&nbsp; {stage_idx+1}/{total}</div>'
+        f'<div class="loader-micro">{micro_spans}</div>'
         f'<div class="loader-dots">{dots}</div>'
         f'<div class="loader-bar-bg"><div class="loader-bar-fg" style="width:{pct}%"></div></div>'
         f'<div class="loader-pct">{pct}%</div>'
         f'</div>'
+        f'{skeleton}'
     )
 
 
@@ -826,8 +1072,27 @@ html:has(#fsLarge:checked) { font-size:18px; }
 .orb4 { width:300px;height:300px;background:#BBF7D0;bottom:-60px;right:100px;animation-delay:2s; }
 @keyframes drift { 0%{transform:translate(0,0) scale(1) rotate(0deg)} 100%{transform:translate(40px,25px) scale(1.1) rotate(8deg)} }
 
+/* Dark-mode illustration variant — the light pastel orbs above turn muddy
+   against a near-black background, so dark mode gets its own deeper,
+   more saturated palette (terracotta/amber/teal glow instead of pastel)
+   at lower opacity so the ambient effect stays a background accent, not
+   a distraction. */
+body:has(#dmchk:checked) .orb1 { background:#B45532; opacity:0.22; }
+body:has(#dmchk:checked) .orb2 { background:#7C3A56; opacity:0.20; }
+body:has(#dmchk:checked) .orb3 { background:#1D5F73; opacity:0.20; }
+body:has(#dmchk:checked) .orb4 { background:#1F6B4A; opacity:0.18; }
+
 /* ── MASTHEAD ── */
-.sati-masthead { position:relative;z-index:1;padding:3.5rem 0 1.5rem;text-align:center; }
+.sati-masthead { position:relative;z-index:1;padding:3.5rem 0 1.5rem;text-align:center;border-radius:24px;transition:background 1.2s ease; }
+/* Time-of-day theming — a soft gradient wash behind the masthead that
+   shifts with the local hour, independent of the light/dark toggle
+   (dark mode still overrides it below for contrast). Hour classes are
+   applied server-side from Python's datetime, so this needs no JS. */
+.sati-masthead.tod-dawn  { background:linear-gradient(180deg, rgba(253,186,140,0.22), transparent 70%); }
+.sati-masthead.tod-day   { background:linear-gradient(180deg, rgba(255,247,230,0.35), transparent 70%); }
+.sati-masthead.tod-dusk  { background:linear-gradient(180deg, rgba(217,119,87,0.20), transparent 70%); }
+.sati-masthead.tod-night { background:linear-gradient(180deg, rgba(99,102,241,0.16), transparent 70%); }
+body:has(#dmchk:checked) .sati-masthead { background:none !important; }
 .sati-lotus { font-size:3rem;display:block;margin-bottom:0.5rem;animation:floatLotus 3.2s ease-in-out infinite; }
 @keyframes floatLotus { 0%,100%{transform:translateY(0) rotate(-2deg)} 50%{transform:translateY(-9px) rotate(2deg)} }
 .sati-wordmark {
@@ -970,6 +1235,60 @@ details { background:var(--card-bg) !important;border-radius:16px !important;bor
 .loader-bar-bg { height:6px;border-radius:99px;background:rgba(217,119,87,0.12);overflow:hidden;margin-bottom:0.5rem; }
 .loader-bar-fg { height:100%;border-radius:99px;background:linear-gradient(90deg,#D97757,#B45532,#0EA5E9,#D97757);background-size:200% 100%;animation:shimmer 1.8s linear infinite;transition:width 0.5s ease; }
 .loader-pct { font-size:0.78rem;font-weight:800;letter-spacing:0.06em;color:var(--loader-sub); }
+
+/* ── ROTATING MICRO-COPY — pure CSS, each span takes its slice of a
+   shared loop via a negative animation-delay so exactly one is visible
+   at a time; no JS or rerun needed, keeps working through a slow stage. ── */
+.loader-micro { position:relative; height:1.2rem; margin:0.4rem 0 0.8rem; }
+.loader-micro-item {
+    position:absolute; left:0; right:0; text-align:center;
+    font-size:0.78rem; font-style:italic; color:#B45532; opacity:0;
+    animation-name:microCycle; animation-timing-function:ease-in-out; animation-iteration-count:infinite;
+}
+body:has(#dmchk:checked) .loader-micro-item { color:#E8A87C; }
+@keyframes microCycle {
+    0% { opacity:0; }
+    3% { opacity:1; }
+    16% { opacity:1; }
+    20% { opacity:0; }
+    100% { opacity:0; }
+}
+
+/* ── SKELETON LOADERS — shaped like the real cards so the layout doesn't
+   "pop" once live content arrives; shown underneath the loader-wrap while
+   generation is in progress. ── */
+.skeleton-wrap { max-width:720px;margin:1.5rem auto 0;display:flex;flex-direction:column;gap:1rem; }
+.skeleton-block {
+    border-radius:18px;padding:1.4rem 1.6rem;background:var(--loader-bg);
+    border:1.5px solid rgba(217,119,87,0.12);box-shadow:0 10px 26px rgba(0,0,0,0.08);
+}
+.skel-weather { display:flex;align-items:center;gap:1rem; }
+.skel-col { flex:1;display:flex;flex-direction:column;gap:0.6rem; }
+.skel-shimmer {
+    background:linear-gradient(90deg, rgba(217,119,87,0.10) 25%, rgba(217,119,87,0.22) 37%, rgba(217,119,87,0.10) 63%);
+    background-size:400% 100%;
+    animation:skelShimmer 1.6s ease-in-out infinite;
+    border-radius:8px;
+}
+.skel-icon { width:52px;height:52px;border-radius:50%;flex-shrink:0; }
+.skel-line { height:0.8rem;margin:0.5rem 0; }
+.skel-w90 { width:90%; } .skel-w75 { width:75%; } .skel-w60 { width:60%; }
+.skel-w50 { width:50%; } .skel-w40 { width:40%; } .skel-w30 { width:30%; }
+@keyframes skelShimmer { 0%{background-position:100% 0} 100%{background-position:0 0} }
+body:has(#dmchk:checked) .skel-shimmer {
+    background:linear-gradient(90deg, rgba(240,196,168,0.08) 25%, rgba(240,196,168,0.18) 37%, rgba(240,196,168,0.08) 63%);
+    background-size:400% 100%;
+}
+
+/* ── ANIMATED SVG WEATHER ICONS ── */
+.wx-svg { display:block; }
+.wx-sun-spin { transform-origin:24px 24px; animation:wxSunSpin 12s linear infinite; }
+@keyframes wxSunSpin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+.wx-cloud-drift { animation:wxCloudDrift 4s ease-in-out infinite alternate; transform-origin:24px 24px; }
+@keyframes wxCloudDrift { from{transform:translateX(-2px)} to{transform:translateX(2px)} }
+.wx-drop { animation:wxDropFall 0.9s linear infinite; opacity:0; }
+.wx-drop-0 { animation-delay:0s; } .wx-drop-1 { animation-delay:0.3s; } .wx-drop-2 { animation-delay:0.6s; }
+@keyframes wxDropFall { 0%{opacity:0;transform:translateY(-4px)} 30%{opacity:1} 100%{opacity:0;transform:translateY(6px)} }
 
 /* ── HERO ROW: audio + weather side by side ── */
 .hero-row { display:grid;grid-template-columns:1.4fr 1fr;gap:1.25rem;margin:2rem 0 0.5rem;position:relative;z-index:2; }
@@ -1180,6 +1499,17 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 .sati-footer p { font-size:0.72rem;color:var(--footer-c);letter-spacing:0.12em;text-transform:uppercase;font-weight:600; }
 
 @keyframes fadeSlideDown { from{opacity:0;transform:translateY(-16px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── EMPTY STATES — consistent illustrated placeholder instead of a
+   blank page before the first brief is generated. ── */
+.empty-state {
+    text-align:center; padding:3rem 1.5rem; border-radius:20px;
+    border:1.5px dashed rgba(217,119,87,0.3); margin:1.5rem 0;
+    animation:fadeSlideDown 0.5s ease both;
+}
+.empty-state-icon { font-size:2.8rem; margin-bottom:0.7rem; opacity:0.75; }
+.empty-state-title { font-weight:800; font-size:1.05rem; color:var(--text-main); margin-bottom:0.4rem; }
+.empty-state-sub { font-size:0.85rem; color:var(--text-sub); max-width:440px; margin:0 auto; line-height:1.55; }
 @keyframes cardReveal { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
 
 /* ── CUSTOM SCROLLBAR ── */
@@ -1188,11 +1518,35 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
 ::-webkit-scrollbar-thumb { background:rgba(217,119,87,0.35); border-radius:99px; }
 ::-webkit-scrollbar-thumb:hover { background:rgba(217,119,87,0.55); }
 
-/* ── PRINT-FRIENDLY ── */
+/* ── PRINT STYLESHEET — a dedicated newspaper-page layout for
+   Ctrl/Cmd+P, not just "the web page with decoration stripped". ── */
 @media print {
-    .sati-bg, .dm-label, .stButton, #dmchk { display:none !important; }
-    .stApp { background:#fff !important; }
-    .sati-section, .news-card, .focus-card, .word-card, .learn-card { box-shadow:none !important; }
+    /* Chrome away everything that only makes sense on-screen. */
+    .sati-bg, .dm-label, .fs-toggle, .stButton, #dmchk, #satiReadProgress,
+    .book-nav-scope, .book-dots, audio, iframe, .stDownloadButton,
+    .stExpander, [data-testid="stExpander"], .skeleton-wrap, .live-source-badge {
+        display:none !important;
+    }
+    .stApp, body { background:#fff !important; color:#1a1208 !important; }
+    * { box-shadow:none !important; text-shadow:none !important; animation:none !important; }
+
+    .sati-masthead { padding:0.5rem 0 1rem !important; background:none !important; border-bottom:3px double #1a1208; }
+    .sati-wordmark { color:#1a1208 !important; -webkit-text-fill-color:#1a1208 !important; }
+    .waveform-wrap { display:none !important; }
+
+    /* Every section becomes a plain bordered newspaper column, no cards. */
+    .sati-section, .news-card, .focus-card, .word-card, .learn-card,
+    .weather-widget, .audio-shell {
+        box-shadow:none !important; border:none !important;
+        background:#fff !important; break-inside:avoid; page-break-inside:avoid;
+        padding:0.5rem 0 !important; margin-bottom:1rem !important;
+    }
+    .news-book-page { background:#fff !important; border:none !important; }
+    .news-detail.long-copy { column-count:2 !important; column-gap:1.2rem; }
+    .section-title, .news-headline { color:#1a1208 !important; font-family:'Playfair Display',Georgia,serif !important; }
+    .section-header { border-bottom:1px solid #1a1208; padding-bottom:0.3rem; margin-bottom:0.6rem; }
+    a { color:#1a1208 !important; text-decoration:underline !important; }
+    .sati-masthead, .sati-section { page-break-after:auto; }
 }
 
 /* ── CARD HOVER ACCENT SWEEP — matching claude.com/blog's card hover style ── */
@@ -1249,6 +1603,16 @@ body:has(#dmchk:checked) .focus-live-note { color:#E8A87C; }
     font-family:Georgia,'Times New Roman',serif !important;
     font-size:0.9rem !important; line-height:1.65 !important;
     column-count:1;
+}
+/* Genuine newspaper multi-column layout for longer stories on wide
+   screens — narrow viewports (and print) fall back to single column
+   so text never gets uncomfortably cramped. */
+@media (min-width: 900px) {
+    .news-book-page .news-detail.long-copy {
+        column-count:2;
+        column-gap:1.6rem;
+        column-rule:1px solid rgba(139,58,31,0.2);
+    }
 }
 .news-book-page .news-index {
     font-family:'Playfair Display',Georgia,serif !important;
@@ -1330,20 +1694,148 @@ button:focus-visible, input:focus-visible, a:focus-visible,
 st.markdown(CSS, unsafe_allow_html=True)
 
 # Pure-CSS dark toggle — clicking it triggers NO Streamlit rerun.
-st.markdown('<input type="checkbox" id="dmchk"><label for="dmchk" class="dm-label"></label>', unsafe_allow_html=True)
+st.markdown(
+    '<input type="checkbox" id="dmchk" aria-label="Toggle dark mode">'
+    '<label for="dmchk" class="dm-label" role="switch" aria-label="Dark mode switch" tabindex="0" '
+    'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();document.getElementById(\'dmchk\').click();}"></label>',
+    unsafe_allow_html=True
+)
+
+# Auto-detect the OS/browser color-scheme preference on first visit only.
+# Once the person has clicked the toggle themselves, their explicit choice
+# (saved in the parent page's localStorage) always wins over the OS setting.
+components.html("""
+<script>
+try {
+  const doc = window.parent.document;
+  const cb  = doc.getElementById('dmchk');
+  if (cb) {
+    const KEY = 'saticast_dm_user_set';
+    const userSet = doc.defaultView.localStorage.getItem(KEY);
+    if (!userSet) {
+      const prefersDark = doc.defaultView.matchMedia
+        && doc.defaultView.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (prefersDark && !cb.checked) { cb.click(); }
+    }
+    if (!cb.dataset.satiListenerBound) {
+      cb.dataset.satiListenerBound = "1";
+      cb.addEventListener('change', () => {
+        doc.defaultView.localStorage.setItem(KEY, '1');
+      });
+    }
+  }
+} catch (e) {}
+</script>
+""", height=0, width=0)
+
+# Reading-progress bar — thin fixed strip at the very top of the page that
+# fills left-to-right as the person scrolls through the brief. Pure JS
+# reaching into the parent document (same technique as the dark-mode
+# script above); degrades to simply not appearing if it can't attach.
+components.html("""
+<script>
+try {
+  const doc = window.parent.document;
+  if (!doc.getElementById('satiReadProgress')) {
+    const bar = doc.createElement('div');
+    bar.id = 'satiReadProgress';
+    bar.style.cssText = 'position:fixed;top:0;left:0;height:3px;width:0%;z-index:999999;'
+      + 'background:linear-gradient(90deg,#D97757,#B45532);transition:width 0.1s ease;pointer-events:none;';
+    doc.body.appendChild(bar);
+    const scroller = doc.scrollingElement || doc.documentElement;
+    const update = () => {
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      const pct = max > 0 ? (scroller.scrollTop / max) * 100 : 0;
+      bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    doc.defaultView.addEventListener('scroll', update, { passive: true });
+    doc.defaultView.addEventListener('resize', update);
+    update();
+  }
+} catch (e) {}
+</script>
+""", height=0, width=0)
+
+# Command palette (Cmd/Ctrl+K) — a small overlay with quick actions, built
+# the same way as the dark-mode auto-detect above: it finds real elements
+# in the parent document and .click()s them, it doesn't reimplement any
+# app logic. Best-effort — if a target button isn't on the page yet (e.g.
+# "Generate" while a brief is already showing further down), that action
+# is simply skipped rather than erroring.
+components.html("""
+<script>
+try {
+  const doc = window.parent.document;
+  if (!doc.getElementById('satiCmdPalette')) {
+    const overlay = doc.createElement('div');
+    overlay.id = 'satiCmdPalette';
+    overlay.style.cssText = 'display:none;position:fixed;inset:0;z-index:999998;'
+      + 'background:rgba(0,0,0,0.45);align-items:flex-start;justify-content:center;padding-top:12vh;';
+    overlay.innerHTML = `
+      <div style="background:var(--card-bg,#fff);border-radius:16px;padding:0.6rem;width:min(420px,90vw);
+                  box-shadow:0 24px 60px rgba(0,0,0,0.3);font-family:'Inter',sans-serif;">
+        <div style="padding:0.5rem 0.7rem;font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
+                    text-transform:uppercase;opacity:0.55;">Quick Actions &nbsp;·&nbsp; Esc to close</div>
+        <button data-cmd="generate" class="sati-cmd-item">🪷 &nbsp;Generate Morning Brief</button>
+        <button data-cmd="darkmode" class="sati-cmd-item">🌗 &nbsp;Toggle Dark Mode</button>
+        <button data-cmd="top" class="sati-cmd-item">⬆️ &nbsp;Scroll to Top</button>
+      </div>`;
+    doc.body.appendChild(overlay);
+    const style = doc.createElement('style');
+    style.textContent = '.sati-cmd-item { display:block; width:100%; text-align:left; padding:0.7rem 0.8rem; '
+      + 'border:none; background:transparent; border-radius:10px; cursor:pointer; font-size:0.9rem; '
+      + 'color:inherit; margin-bottom:2px; } .sati-cmd-item:hover { background:rgba(217,119,87,0.14); }';
+    doc.head.appendChild(style);
+
+    function closePalette() { overlay.style.display = 'none'; }
+    function openPalette() { overlay.style.display = 'flex'; }
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePalette(); });
+
+    overlay.querySelectorAll('.sati-cmd-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cmd = btn.dataset.cmd;
+        if (cmd === 'darkmode') {
+          const cb = doc.getElementById('dmchk');
+          if (cb) cb.click();
+        } else if (cmd === 'top') {
+          (doc.scrollingElement || doc.documentElement).scrollTo({ top: 0, behavior: 'smooth' });
+        } else if (cmd === 'generate') {
+          const btns = Array.from(doc.querySelectorAll('button'));
+          const target = btns.find(b => b.textContent.includes('Generate Morning Brief'));
+          if (target) target.click();
+        }
+        closePalette();
+      });
+    });
+
+    doc.defaultView.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        overlay.style.display === 'flex' ? closePalette() : openPalette();
+      } else if (e.key === 'Escape') {
+        closePalette();
+      }
+    });
+  }
+} catch (e) {}
+</script>
+""", height=0, width=0)
 
 # Pure-CSS font-size control (A⁻/A/A⁺) — same no-rerun technique as dark
 # mode. Scales the ROOT font-size, which every existing "rem" measurement
 # in the app is relative to, so it cascades everywhere with zero need to
 # touch individual font-size declarations.
 st.markdown(
-    '<div class="fs-toggle">'
-    '<input type="radio" name="fontsize" id="fsSmall">'
-    '<input type="radio" name="fontsize" id="fsNormal" checked>'
-    '<input type="radio" name="fontsize" id="fsLarge">'
-    '<label for="fsSmall" class="fs-btn">A⁻</label>'
-    '<label for="fsNormal" class="fs-btn">A</label>'
-    '<label for="fsLarge" class="fs-btn">A⁺</label>'
+    '<div class="fs-toggle" role="radiogroup" aria-label="Text size">'
+    '<input type="radio" name="fontsize" id="fsSmall" aria-label="Small text">'
+    '<input type="radio" name="fontsize" id="fsNormal" checked aria-label="Normal text">'
+    '<input type="radio" name="fontsize" id="fsLarge" aria-label="Large text">'
+    '<label for="fsSmall" class="fs-btn" tabindex="0" '
+    'onkeydown="if(event.key===\'Enter\'){document.getElementById(\'fsSmall\').click();}">A⁻</label>'
+    '<label for="fsNormal" class="fs-btn" tabindex="0" '
+    'onkeydown="if(event.key===\'Enter\'){document.getElementById(\'fsNormal\').click();}">A</label>'
+    '<label for="fsLarge" class="fs-btn" tabindex="0" '
+    'onkeydown="if(event.key===\'Enter\'){document.getElementById(\'fsLarge\').click();}">A⁺</label>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -1363,9 +1855,9 @@ def sep():
     )
 
 
-def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key="", cross_refs=None, relevance_map=None):
+def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key="", cross_refs=None, relevance_map=None, stagger_idx=0):
     st.markdown(
-        f'<div class="sati-section">'
+        f'<div class="sati-section" style="animation-delay:{stagger_idx*90}ms">'
         f'<div class="section-header">'
         f'<div class="section-badge {badge_cls}">{icon}</div>'
         f'<h2 class="section-title">{title}</h2>{live_badge}</div>',
@@ -1376,11 +1868,16 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
+    # "Continue reading" — the page you were on for each section survives a
+    # real browser reload (not just a Streamlit rerun) by round-tripping
+    # through the URL's query string, e.g. ?news_page_National=2.
     page_key = f"news_page_{section_key}"
     if page_key not in st.session_state:
-        st.session_state[page_key] = 0
+        qp_val = st.query_params.get(page_key)
+        st.session_state[page_key] = int(qp_val) if qp_val is not None and str(qp_val).isdigit() else 0
     st.session_state[page_key] = max(0, min(st.session_state[page_key], len(items) - 1))
     idx = st.session_state[page_key]
+    st.query_params[page_key] = str(idx)
     item = items[idx]
 
     src = item.get("source", "")
@@ -1404,12 +1901,20 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
         (f'<span class="news-source">{src}</span>' if src else "")
     )
 
+    detail_text = item.get("detail", "")
+    detail_cls  = "news-detail long-copy" if len(detail_text) > 260 else "news-detail"
+    stale_badge = (
+        '<span class="live-source-badge" style="margin-left:0.5rem;" '
+        'title="Live news fetch failed — showing the last successful headlines.">⚠️ Offline — cached</span>'
+        if item.get("_stale") else ""
+    )
+
     st.markdown(
         f'<div class="news-book-wrap">'
         f'<div class="news-card news-book-page">'
         f'<div class="news-index {idx_cls}">0{idx+1}</div>'
-        f'<div><div class="news-headline">{hl}</div>'
-        f'<div class="news-detail">{item.get("detail","")}</div>'
+        f'<div><div class="news-headline">{hl}{stale_badge}</div>'
+        f'<div class="{detail_cls}">{detail_text}</div>'
         f'{src_html}</div></div></div>',
         unsafe_allow_html=True
     )
@@ -1503,7 +2008,7 @@ def render_result(res: dict):
         )
 
     if weather_data:
-        wicon = weather_emoji(weather_data.get("icon", ""))
+        wicon = weather_icon_svg(weather_data.get("icon", ""))
         cond = weather_data.get("icon", "")
         particle_html = ""
         if cond in ("Rain", "Drizzle", "Thunderstorm"):
@@ -1512,11 +2017,18 @@ def render_result(res: dict):
             particle_html = '<div class="wx-particles wx-sun"><span class="wx-ray"></span></div>'
         elif cond == "Clouds":
             particle_html = '<div class="wx-particles wx-clouds"><span></span><span></span></div>'
+        stale_badge = ""
+        if weather_data.get("_stale"):
+            stale_badge = (
+                f'<span class="live-source-badge" style="margin-left:0.5rem;" '
+                f'title="Live weather fetch failed — showing the last successful reading.">'
+                f'⚠️ Offline — cached</span>'
+            )
         weather_html = (
             f'<div class="weather-widget" style="position:relative;overflow:hidden;">'
             f'{particle_html}'
             f'<div class="weather-icon" style="position:relative;z-index:1;">{wicon}</div>'
-            f'<div style="position:relative;z-index:1;"><div class="weather-temp">{weather_data["temp"]}°C</div>'
+            f'<div style="position:relative;z-index:1;"><div class="weather-temp">{weather_data["temp"]}°C{stale_badge}</div>'
             f'<div class="weather-desc">{weather_data["desc"]} · {city}</div>'
             f'<div class="weather-meta">💧 {weather_data["humidity"]}% · 💨 {weather_data["wind"]} km/h</div></div>'
             f'<div style="position:relative;z-index:1;"><div class="weather-feels">Feels like</div>'
@@ -1536,11 +2048,33 @@ def render_result(res: dict):
 
     if audio_b64:
         autoplay_attr = "autoplay" if res.get("fresh", False) else ""
+        # Waveform scrubber — a row of bars (seeded deterministically from
+        # the audio's own byte length so it looks different per-brief, not
+        # random-looking on every rerun) that fill left-to-right in sync
+        # with actual playback position, and can be clicked to seek.
+        _n_bars = 56
+        _seed = sum(bytearray(audio_b64[:400].encode())) if audio_b64 else 0
+        import random as _random
+        _rng = _random.Random(_seed)
+        _bar_heights = [round(6 + _rng.random() * 22, 1) for _ in range(_n_bars)]
+        _bars_html = "".join(
+            f'<div class="wf-bar" data-i="{i}" style="height:{h}px;" onclick="satiSeek({i})"></div>'
+            for i, h in enumerate(_bar_heights)
+        )
         components.html(f"""
         <div style="font-family:'Inter',sans-serif;overflow:visible;padding-bottom:6px;">
-            <audio id="satiAudioPlayer" controls {autoplay_attr} style="width:100%;border-radius:12px;"
-                   src="data:audio/mp3;base64,{audio_b64}"></audio>
-            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+            <audio id="satiAudioPlayer" {autoplay_attr}
+                   src="data:audio/mp3;base64,{audio_b64}" style="display:none;"></audio>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <button id="satiPlayBtn" onclick="satiTogglePlay()"
+                    style="width:38px;height:38px;border-radius:50%;border:none;background:#D97757;color:#fff;
+                    cursor:pointer;font-size:1rem;flex-shrink:0;display:flex;align-items:center;justify-content:center;">▶</button>
+                <div id="satiWaveform" style="display:flex;align-items:center;gap:2px;height:30px;flex:1;cursor:pointer;">
+                    {_bars_html}
+                </div>
+                <span id="satiTimeLabel" style="font-size:0.72rem;color:#94A3B8;flex-shrink:0;min-width:76px;text-align:right;">0:00 / 0:00</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                 <span style="font-size:0.75rem;color:#94A3B8;align-self:center;margin-right:4px;">Speed:</span>
                 <button onclick="document.getElementById('satiAudioPlayer').playbackRate=0.75"
                     style="padding:4px 10px;border-radius:999px;border:1px solid #D97757;background:transparent;color:#E8A87C;cursor:pointer;font-size:0.72rem;">0.75x</button>
@@ -1552,7 +2086,43 @@ def render_result(res: dict):
                     style="padding:4px 10px;border-radius:999px;border:1px solid #D97757;background:transparent;color:#E8A87C;cursor:pointer;font-size:0.72rem;">1.5x</button>
             </div>
         </div>
-        """, height=140)
+        <style>
+            .wf-bar {{ width:3px;background:rgba(217,119,87,0.25);border-radius:2px;transition:background 0.1s; }}
+            .wf-bar.wf-played {{ background:#D97757; }}
+        </style>
+        <script>
+            const satiAudio = document.getElementById('satiAudioPlayer');
+            const satiBtn = document.getElementById('satiPlayBtn');
+            const satiBars = document.querySelectorAll('.wf-bar');
+            const satiLabel = document.getElementById('satiTimeLabel');
+            function fmtT(s) {{
+                if (!isFinite(s)) return '0:00';
+                const m = Math.floor(s/60), sec = Math.floor(s%60);
+                return m + ':' + String(sec).padStart(2,'0');
+            }}
+            function satiTogglePlay() {{
+                if (satiAudio.paused) {{ satiAudio.play(); satiBtn.textContent = '⏸'; }}
+                else {{ satiAudio.pause(); satiBtn.textContent = '▶'; }}
+            }}
+            function satiSeek(barIndex) {{
+                if (satiAudio.duration) {{
+                    satiAudio.currentTime = (barIndex / {_n_bars}) * satiAudio.duration;
+                }}
+            }}
+            satiAudio.addEventListener('timeupdate', () => {{
+                if (!satiAudio.duration) return;
+                const pct = satiAudio.currentTime / satiAudio.duration;
+                const filled = Math.floor(pct * {_n_bars});
+                satiBars.forEach((b, i) => b.classList.toggle('wf-played', i <= filled));
+                satiLabel.textContent = fmtT(satiAudio.currentTime) + ' / ' + fmtT(satiAudio.duration);
+            }});
+            satiAudio.addEventListener('loadedmetadata', () => {{
+                satiLabel.textContent = '0:00 / ' + fmtT(satiAudio.duration);
+            }});
+            satiAudio.addEventListener('ended', () => {{ satiBtn.textContent = '▶'; }});
+            if ('{autoplay_attr}' === 'autoplay') {{ satiBtn.textContent = '⏸'; }}
+        </script>
+        """, height=150)
         st.markdown(
             f'<div class="dl-wrap"><a href="data:audio/mp3;base64,{audio_b64}" '
             f'download="saticast_{datetime.now().strftime("%Y%m%d")}.mp3">⬇️ Download MP3</a></div>',
@@ -1583,12 +2153,21 @@ def render_result(res: dict):
     cross_refs = find_cross_references(_all_items_by_topic)
     relevance_map = res.get("relevance_map") or {}
 
+    # Entrance-stagger counter — each section that actually renders gets a
+    # slightly later animation-delay than the one before it, so the brief
+    # cascades in instead of every card popping in simultaneously.
+    _stagger = {"n": 0}
+    def _next_stagger():
+        _stagger["n"] += 1
+        return _stagger["n"] - 1
+
     def render_market():
         if not markets_data:
             return
         sep()
         st.markdown(
-            '<div class="sati-section"><div class="section-header">'
+            f'<div class="sati-section" style="animation-delay:{_next_stagger()*90}ms">'
+            '<div class="section-header">'
             '<div class="section-badge badge-sports">📈</div>'
             '<h2 class="section-title">Market Pulse</h2></div></div>',
             unsafe_allow_html=True
@@ -1609,23 +2188,23 @@ def render_result(res: dict):
     def render_national():
         sep()
         items, badge = items_for("National", "india_news")
-        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge, "National", cross_refs, relevance_map)
+        news_section("National Intel", "badge-india", "idx-india", "🇮🇳", items, badge, "National", cross_refs, relevance_map, _next_stagger())
 
     def render_global():
         sep()
         items, badge = items_for("Global", "global_news")
-        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge, "Global", cross_refs, relevance_map)
+        news_section("Global Overview", "badge-global", "idx-global", "🌐", items, badge, "Global", cross_refs, relevance_map, _next_stagger())
 
     def render_tech():
         sep()
         items, badge = items_for("Tech", "tech_news")
-        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge, "Tech", cross_refs, relevance_map)
+        news_section("Tech & Architecture", "badge-tech", "idx-tech", "⚡", items, badge, "Tech", cross_refs, relevance_map, _next_stagger())
 
     def render_sports():
         items, badge = items_for("Sports", "sports_flash")
         if items:
             sep()
-            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge, "Sports", cross_refs, relevance_map)
+            news_section("Sports Flash", "badge-sports", "idx-sports", "🏏", items, badge, "Sports", cross_refs, relevance_map, _next_stagger())
 
     def render_learning():
         if not payload.get("learning_byte"):
@@ -1634,7 +2213,7 @@ def render_result(res: dict):
         lb = payload["learning_byte"]
         topic_num = datetime.now().timetuple().tm_yday % len(LEARNING_TOPICS) + 1
         st.markdown(
-            f'<div class="sati-section">'
+            f'<div class="sati-section" style="animation-delay:{_next_stagger()*90}ms">'
             f'<div class="section-header">'
             f'<div class="section-badge badge-learn">💡</div>'
             f'<h2 class="section-title">Learning Byte</h2>'
@@ -1855,14 +2434,59 @@ def build_pdf_export(res: dict):
 
 
 # ═══════════════════════════════════════════════════
+# CHECK-IN LOG — a quiet, factual "days visited" note, deliberately NOT a
+# gamified streak (no fire emoji, no reset-anxiety, no push to keep it
+# alive) — just a small honest observation that's easy to ignore.
+# ═══════════════════════════════════════════════════
+VISIT_LOG_FILE = ".saticast_visit_log.json"
+
+
+def _log_visit_and_get_streak() -> int:
+    today_str = datetime.now().date().isoformat()
+    try:
+        days = []
+        if os.path.exists(VISIT_LOG_FILE):
+            with open(VISIT_LOG_FILE, "r") as f:
+                days = json.load(f)
+        if today_str not in days:
+            days.append(today_str)
+            days = sorted(set(days))[-60:]  # keep the file small
+            with open(VISIT_LOG_FILE, "w") as f:
+                json.dump(days, f)
+        # Count consecutive days ending today
+        from datetime import timedelta
+        streak = 0
+        cursor = datetime.now().date()
+        day_set = set(days)
+        while cursor.isoformat() in day_set:
+            streak += 1
+            cursor -= timedelta(days=1)
+        return streak
+    except Exception:
+        return 0
+
+
+_checkin_streak = _log_visit_and_get_streak()
+
+# ═══════════════════════════════════════════════════
 # MASTHEAD
 # ═══════════════════════════════════════════════════
+_streak_note = (
+    f'<div class="sati-meaning" style="margin-top:0.3rem;font-size:0.78rem;opacity:0.65;">'
+    f'SatiCast has been opened {_checkin_streak} day{"s" if _checkin_streak != 1 else ""} in a row</div>'
+    if _checkin_streak >= 2 else ""
+)
+
+_hour = datetime.now().hour
+_tod_cls = "tod-dawn" if 5 <= _hour < 8 else "tod-day" if 8 <= _hour < 17 else "tod-dusk" if 17 <= _hour < 20 else "tod-night"
+
 st.markdown(
-    '<div class="sati-masthead">'
+    f'<div class="sati-masthead {_tod_cls}">'
     '<span class="sati-lotus">🪷</span>'
     '<div class="sati-wordmark">SATICAST</div>'
     '<div class="sati-tagline">Daily Cast &nbsp;·&nbsp; Your mindful morning briefing</div>'
     '<div class="sati-meaning">✦ Sati — the Pali word for mindfulness &amp; awareness ✦</div>'
+    f'{_streak_note}'
     '<div class="waveform-wrap">'
     + '<div class="bar"></div>' * 16 +
     '</div></div>',
@@ -1928,6 +2552,10 @@ voice_keys = list(VOICE_OPTIONS.keys())
 
 voice_choice = pick_one_pill("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0])
 
+vibe_keys  = list(QUOTE_VIBES.keys())
+vibe_choice = pick_one_pill("✨ Quote Vibe", vibe_keys, "quote_vibe_pill", vibe_keys[0])
+quote_vibe  = QUOTE_VIBES[vibe_choice]
+
 c2, c3 = st.columns(2)
 with c2:
     city_input = st.text_input("🌆 City for Weather", value="Mumbai",
@@ -1937,6 +2565,22 @@ with c3:
     if ELEVENLABS_KEY:
         tts_engines += list(ELEVENLABS_VOICES.keys())
     tts_choice = pick_one_pill("🔊 TTS Engine", tts_engines, "tts_pill", tts_engines[0])
+
+if "pref_watchlist" not in st.session_state:
+    st.session_state.pref_watchlist = load_shared_settings().get("watchlist", "")
+watchlist_input = st.text_input(
+    "📊 Watchlist — extra stocks/indices (Yahoo Finance symbols, comma-separated)",
+    placeholder="e.g. AAPL, TCS.NS, BTC-USD",
+    key="pref_watchlist",
+    help="Adds these to Market Pulse alongside Nifty/Sensex/USD-INR/Gold. Use Yahoo Finance ticker symbols."
+)
+if watchlist_input.strip():
+    save_shared_settings({"watchlist": watchlist_input.strip()})
+
+extra_tickers = tuple(
+    (sym.strip().upper(), sym.strip().upper())
+    for sym in watchlist_input.split(",") if sym.strip()
+)[:8]  # capped to keep the market-fetch fan-out bounded
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
@@ -1956,14 +2600,51 @@ explain_relevance = st.toggle(
     help="Adds one extra AI-generated sentence per LIVE headline (requires NEWS_API_KEY) — off by default since it adds one more parallel call."
 )
 
-your_name = st.text_input("👤 Your Name (optional — personalizes the greeting)",
+if "pref_name" not in st.session_state:
+    st.session_state.pref_name = load_shared_settings().get("your_name", "")
+
+your_name = st.text_input("👤 Your Name (optional — personalizes the greeting · shared with SanghaStatus)",
                           placeholder="e.g. Pranay", key="pref_name")
+if your_name.strip():
+    save_shared_settings({"your_name": your_name.strip()})
 
 st.markdown(
     f'<div class="script-lang-badge">📢 Script Language auto-follows your voice: '
     f'<strong>{lang_display}</strong></div>',
     unsafe_allow_html=True
 )
+
+# ── SETTINGS EXPORT / IMPORT — download your preferences as a small JSON
+# file, restore them on a fresh browser/session. Deliberately limited to
+# plain preference values (no history, no API keys). ──
+with st.expander("⚙️ Export / Import Settings", expanded=False):
+    _settings_snapshot = {
+        "voice_pill": st.session_state.get("voice_pill"),
+        "quote_vibe_pill": st.session_state.get("quote_vibe_pill"),
+        "tts_pill": st.session_state.get("tts_pill"),
+        "pref_city": st.session_state.get("pref_city"),
+        "pref_watchlist": st.session_state.get("pref_watchlist"),
+        "pref_name": st.session_state.get("pref_name"),
+    }
+    ecol1, ecol2 = st.columns(2)
+    with ecol1:
+        st.download_button(
+            "⬇️ Download my settings", data=json.dumps(_settings_snapshot, indent=2),
+            file_name="saticast_settings.json", mime="application/json",
+            key="dl_settings_btn", use_container_width=True
+        )
+    with ecol2:
+        _uploaded_settings = st.file_uploader("Restore from file", type=["json"], key="settings_upload", label_visibility="collapsed")
+        if _uploaded_settings is not None:
+            try:
+                _restored = json.load(_uploaded_settings)
+                for _k, _v in _restored.items():
+                    if _v is not None:
+                        st.session_state[_k] = _v
+                st.success("✅ Settings restored — refresh above widgets by re-running.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Couldn't read that settings file: {e}")
 
 # ═══════════════════════════════════════════════════
 # GENERATE
@@ -2002,13 +2683,13 @@ if trigger:
     slot.markdown(render_loader(1), unsafe_allow_html=True)
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = {
-            "quote":   ex.submit(fetch_quote_of_day),
+            "quote":   ex.submit(fetch_quote_of_day, quote_vibe),
             "word":    ex.submit(fetch_word_of_day),
             "weather": ex.submit(fetch_weather, city),
             "otd":     ex.submit(fetch_on_this_day),
         }
         if "Market" in chosen_topics:
-            futs["markets"] = ex.submit(fetch_markets)
+            futs["markets"] = ex.submit(fetch_markets, extra_tickers)
         for topic_name, api_key_name in NEWS_TOPIC_MAP.items():
             if topic_name in chosen_topics:
                 futs[api_key_name] = ex.submit(fetch_news, api_key_name)
@@ -2231,6 +2912,7 @@ if trigger:
             "audio_b64": audio_b64,
         })
         st.session_state.history = st.session_state.history[:7]
+        save_brief_history(st.session_state.history)
 
         slot.empty()
         st.balloons()
@@ -2245,6 +2927,16 @@ if trigger:
 if st.session_state.last_result:
     render_result(st.session_state.last_result)
     st.session_state.last_result["fresh"] = False
+else:
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="empty-state-icon">🪷</div>'
+        '<div class="empty-state-title">Your brief hasn\'t been generated yet</div>'
+        '<div class="empty-state-sub">Pick your topics and preferences above, then hit '
+        '"Generate Morning Brief" — weather, news, markets and your daily quote will be pulled together in one go.</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 # ═══════════════════════════════════════════════════
 # HISTORY
@@ -2265,3 +2957,20 @@ if st.session_state.history:
                 st.audio(base64.b64decode(entry["audio_b64"]), format="audio/mp3")
             else:
                 st.caption("📄 Text-only brief (audio was skipped)")
+
+# ═══════════════════════════════════════════════════
+# SUITE FOOTER — cross-links to SanghaStatus, so the two apps feel like
+# one product suite rather than two unrelated URLs. Only shown when the
+# deployer has set SANGHASTATUS_URL in secrets — no hardcoded guess at a
+# URL this app can't actually know.
+# ═══════════════════════════════════════════════════
+_sibling_url = st.secrets.get("SANGHASTATUS_URL", "")
+if _sibling_url:
+    st.markdown(
+        f'<div style="text-align:center;margin:2.5rem 0 1rem;padding-top:1.2rem;'
+        f'border-top:1px solid rgba(217,119,87,0.15);font-size:0.8rem;opacity:0.75;">'
+        f'🪷 SatiCast &nbsp;·&nbsp; part of the same suite as '
+        f'<a href="{_sibling_url}" target="_blank" style="color:#D97757;font-weight:700;">🏛️ SanghaStatus</a>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
