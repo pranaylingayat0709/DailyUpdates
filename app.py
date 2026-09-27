@@ -1223,6 +1223,14 @@ div[class*="st-key-pillopt_"] button:hover {
 }
 div[class*="st-key-pillopt_"] button:active { transform:scale(0.96) !important; }
 
+/* ── PILL-ROW DECORATIVE MOTIF (pill_row_with_decor) ──
+   Fills the wide empty margin beside a short pill row on desktop with a
+   soft, theme-tinted illustration. Hidden below tablet width so it never
+   competes with the actual controls on mobile, and non-interactive. */
+.pill-decor { pointer-events:none; opacity:0.9; margin-top:-0.3rem; }
+.pill-decor svg { width:100%; height:auto; max-height:110px; display:block; }
+@media (max-width: 900px) { .pill-decor { display:none !important; } }
+
 details summary { color:var(--text-main) !important;font-weight:600 !important; }
 details { background:var(--card-bg) !important;border-radius:16px !important;border:1.5px solid var(--card-bdr) !important;padding:0.5rem 1rem !important;margin-bottom:1rem !important; }
 
@@ -2625,6 +2633,61 @@ def pick_one_pill(label: str, options: list, state_key: str, default: str):
     return _pill_grid_fallback(label, options, state_key, default)
 
 
+def _decorative_motif(kind: str) -> str:
+    """
+    Soft, hand-drawn-style inline SVG filler for the wide blank margin next
+    to a pill row on desktop. Not an AI-generated image — this environment
+    has no image-generation tool available, so this is a lightweight,
+    theme-matching illustration built from shapes instead, related to the
+    section it sits beside (mic waves for Voice & Accent, sparkle/quote
+    marks for Quote Vibe). Purely decorative: aria-hidden, and hidden on
+    narrow screens via the .pill-decor CSS class so it never competes with
+    the actual controls on mobile.
+    """
+    if kind == "voice":
+        return """
+        <svg viewBox="0 0 240 160" aria-hidden="true">
+          <circle cx="70" cy="80" r="55" fill="#D97757" opacity="0.10"/>
+          <circle cx="150" cy="55" r="30" fill="#B45532" opacity="0.10"/>
+          <g stroke="#B45532" stroke-width="3" stroke-linecap="round" opacity="0.35">
+            <path d="M100 60 v40" /><path d="M115 45 v70" /><path d="M130 30 v100" />
+            <path d="M145 45 v70" /><path d="M160 60 v40" />
+          </g>
+          <circle cx="185" cy="115" r="4" fill="#D97757" opacity="0.4"/>
+          <circle cx="200" cy="100" r="3" fill="#D97757" opacity="0.3"/>
+        </svg>
+        """
+    # "quote" vibe motif — sparkles + open/close quote marks
+    return """
+    <svg viewBox="0 0 240 160" aria-hidden="true">
+      <circle cx="180" cy="90" r="50" fill="#D97757" opacity="0.10"/>
+      <circle cx="90" cy="45" r="26" fill="#B45532" opacity="0.10"/>
+      <text x="60" y="105" font-size="70" fill="#B45532" opacity="0.30" font-family="Georgia,serif">&#8220;</text>
+      <text x="150" y="90" font-size="46" fill="#D97757" opacity="0.35" font-family="Georgia,serif">&#8221;</text>
+      <g fill="#D97757" opacity="0.4">
+        <path d="M200 40 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3 z"/>
+        <path d="M50 130 l2 6 6 2 -6 2 -2 6 -2 -6 -6 -2 6 -2 z"/>
+      </g>
+    </svg>
+    """
+
+
+def pill_row_with_decor(label: str, options: list, state_key: str, default: str, motif: str):
+    """Same as pick_one_pill, but lays the pill grid out next to a soft
+    decorative illustration so the wide empty margin beside short pill
+    rows isn't left blank on desktop. The illustration collapses away on
+    narrow/mobile screens (see .pill-decor CSS)."""
+    left, right = st.columns([3, 2])
+    with left:
+        result = pick_one_pill(label, options, state_key, default)
+    with right:
+        st.markdown(
+            f'<div class="pill-decor">{_decorative_motif(motif)}</div>',
+            unsafe_allow_html=True
+        )
+    return result
+
+
 def _pill_grid_fallback(label: str, options: list, state_key: str, default: str, per_row: int = 3):
     """Renders a compact, wrapping row of chip-style buttons.
 
@@ -2667,10 +2730,10 @@ def _pill_grid_fallback(label: str, options: list, state_key: str, default: str,
 
 voice_keys = list(VOICE_OPTIONS.keys())
 
-voice_choice = pick_one_pill("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0])
+voice_choice = pill_row_with_decor("🎙 Voice & Accent", voice_keys, "voice_pill", voice_keys[0], "voice")
 
 vibe_keys  = list(QUOTE_VIBES.keys())
-vibe_choice = pick_one_pill("✨ Quote Vibe", vibe_keys, "quote_vibe_pill", vibe_keys[0])
+vibe_choice = pill_row_with_decor("✨ Quote Vibe", vibe_keys, "quote_vibe_pill", vibe_keys[0], "quote")
 quote_vibe  = QUOTE_VIBES[vibe_choice]
 
 c2, c3 = st.columns(2)
