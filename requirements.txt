@@ -1,7 +1,7 @@
-streamlit>=1.32.0
+streamlit>=1.36.0
 openai>=1.14.0
 gtts>=2.5.1
 requests>=2.31.0
-yfinance>=0.2.38d
-fpdf2
+yfinance>=0.2.38
+fpdf2>=2.7.9
 python-docx

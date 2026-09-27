@@ -1161,27 +1161,11 @@ div[data-testid="stPills"] div[role="group"] {
     row-gap: 8px !important;
 }
 
-/* ── FALLBACK PILL GRID (only used if st.pills isn't available in this
-   Streamlit version — see _pill_grid_fallback). Uses the same proven
-   marker-sibling technique: a hidden marker placed right before the
-   selected button, highlighted via a plain adjacent-sibling selector. ── */
 .pill-label {
     color:#8B3A1F !important;font-size:0.74rem;font-weight:700;
     letter-spacing:0.08em;text-transform:uppercase;margin:0.4rem 0 0.5rem;
 }
 body:has(#dmchk:checked) .pill-label { color:#F0C4A8 !important; }
-.pill-scope-fallback, .pill-selected-marker { height:0; margin:0; padding:0; }
-.pill-scope-fallback ~ div[data-testid="stHorizontalBlock"] button {
-    border-radius:12px !important;padding:0.4rem 0.5rem !important;font-size:0.74rem !important;
-    font-weight:600 !important;white-space:normal !important;line-height:1.25 !important;
-    min-height:2.4rem !important;box-shadow:none !important;transform:none !important;
-    margin:0.2rem 0 !important;background:var(--input-bg) !important;color:var(--text-main) !important;
-    border:1.5px solid var(--input-bdr) !important;
-}
-.pill-selected-marker + div[data-testid="stButton"] button {
-    background:linear-gradient(135deg,#D97757,#B45532) !important;
-    color:#FFFFFF !important;border:none !important;font-weight:800 !important;
-}
 
 /* ── SCRIPT LANGUAGE BADGE (replaces the disabled, unreadable selectbox) ── */
 .script-lang-badge {
@@ -1209,6 +1193,35 @@ body:has(#dmchk:checked) .pill-label { color:#F0C4A8 !important; }
 }
 .stButton > button:hover { box-shadow:0 14px 44px rgba(217,119,87,0.5) !important;transform:translateY(-3px) scale(1.03) !important; }
 .stButton > button:active { transform:scale(0.97) !important; }
+
+/* ── COMPACT PILL CHIPS (pick_one_pill / _pill_grid_fallback) ──
+   Placed AFTER '.stButton > button' on purpose: with equal selector
+   specificity, the later rule in the stylesheet wins, so these smaller
+   chip overrides always beat the big-CTA default above regardless of
+   DOM order. Targeted by each button's own `key` (the `st-key-<key>`
+   class Streamlit attaches to its wrapper), not by sibling position —
+   see _pill_grid_fallback's docstring for why that matters. */
+div[class*="st-key-pillgroup_"] {
+    display:flex !important; flex-wrap:wrap !important; gap:0.55rem !important;
+    align-items:center !important; margin:0.2rem 0 1rem !important;
+}
+div[class*="st-key-pillgroup_"] > div { width:auto !important; }
+div[class*="st-key-pillopt_"] { width:auto !important; }
+div[class*="st-key-pillopt_"] button {
+    display:inline-flex !important; width:auto !important; min-width:auto !important;
+    margin:0 !important; padding:0.42rem 1.05rem !important;
+    font-size:0.78rem !important; font-weight:600 !important;
+    letter-spacing:normal !important; text-transform:none !important;
+    border-radius:999px !important; box-shadow:none !important;
+    background:var(--input-bg) !important; color:var(--text-main) !important;
+    border:1.5px solid var(--input-bdr) !important;
+    transition:transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+div[class*="st-key-pillopt_"] button:hover {
+    transform:translateY(-1px) !important;
+    box-shadow:0 4px 12px rgba(217,119,87,0.25) !important;
+}
+div[class*="st-key-pillopt_"] button:active { transform:scale(0.96) !important; }
 
 details summary { color:var(--text-main) !important;font-weight:600 !important; }
 details { background:var(--card-bg) !important;border-radius:16px !important;border:1.5px solid var(--card-bdr) !important;padding:0.5rem 1rem !important;margin-bottom:1rem !important; }
@@ -1855,6 +1868,11 @@ def sep():
     )
 
 
+def _get_watch_terms() -> list:
+    raw = st.session_state.get("pref_topic_watchlist", "")
+    return [t.strip().lower() for t in raw.split(",") if t.strip()]
+
+
 def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_key="", cross_refs=None, relevance_map=None, stagger_idx=0):
     st.markdown(
         f'<div class="sati-section" style="animation-delay:{stagger_idx*90}ms">'
@@ -1909,11 +1927,22 @@ def news_section(title, badge_cls, idx_cls, icon, items, live_badge="", section_
         if item.get("_stale") else ""
     )
 
+    # Watchlist mention badge — pure keyword match against the headline +
+    # detail text, no extra API call. Shown only when at least one of the
+    # person's watch terms actually appears in this item.
+    watch_terms = _get_watch_terms()
+    matched_terms = [t for t in watch_terms if t in (hl_text + " " + detail_text).lower()]
+    watch_badge = (
+        f'<span class="live-source-badge" style="margin-left:0.5rem;background:rgba(245,158,11,0.18);color:#92400E;" '
+        f'title="Matches your watchlist">👀 {matched_terms[0].title()}</span>'
+        if matched_terms else ""
+    )
+
     st.markdown(
         f'<div class="news-book-wrap">'
         f'<div class="news-card news-book-page">'
         f'<div class="news-index {idx_cls}">0{idx+1}</div>'
-        f'<div><div class="news-headline">{hl}{stale_badge}</div>'
+        f'<div><div class="news-headline">{hl}{stale_badge}{watch_badge}</div>'
         f'<div class="{detail_cls}">{detail_text}</div>'
         f'{src_html}</div></div></div>',
         unsafe_allow_html=True
@@ -2133,6 +2162,18 @@ def render_result(res: dict):
     greeting = payload.get("greeting", "Good morning! Welcome to SatiCast.")
     st.markdown(f'<div class="greeting-card">👋 {greeting}</div>', unsafe_allow_html=True)
 
+    # ── FOCUS-BLOCK NUDGE — only on a light day (few/no meetings logged),
+    # a small suggestion to protect some deep-work time, Reclaim.ai-style.
+    # Purely a text nudge — no calendar is actually touched or scheduled.
+    _mc = res.get("meeting_count", 0)
+    if _mc <= 1:
+        st.markdown(
+            '<div class="greeting-card" style="margin-top:-0.5rem;font-size:0.85rem;opacity:0.85;">'
+            '🧘 Light day on the calendar — worth blocking 30–60 minutes for deep, uninterrupted work before it fills up.'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
     live_tag = '<span class="live-source-badge">🔴 Live headlines</span>'
 
     def items_for(topic_name, payload_key):
@@ -2302,9 +2343,11 @@ def render_result(res: dict):
             unsafe_allow_html=True
         )
 
-    # ── DOWNLOAD TEXT BRIEF ──
+    # ── DOWNLOAD / SEND TEXT BRIEF ── multi-format delivery: file downloads
+    # plus a mailto link so the brief can be emailed to yourself (or anyone)
+    # without this app needing its own email-sending credentials.
     brief_txt = build_text_export(res)
-    dl_col1, dl_col2 = st.columns(2)
+    dl_col1, dl_col2, dl_col3 = st.columns(3)
     with dl_col1:
         st.download_button(
             "⬇️ Download as Text", data=brief_txt,
@@ -2321,6 +2364,21 @@ def render_result(res: dict):
             )
         elif pdf_err:
             st.caption(f"📄 PDF export unavailable: {pdf_err}")
+    with dl_col3:
+        import urllib.parse as _urlparse
+        _mail_subject = _urlparse.quote(f"SatiCast Brief — {res.get('gen_date','')}")
+        # Most mail clients truncate very long mailto bodies — cap it and
+        # point to the text/PDF download for the full version.
+        _mail_body_raw = brief_txt if len(brief_txt) < 1800 else brief_txt[:1800] + "\n\n… (truncated — see the downloaded file for the full brief)"
+        _mail_body = _urlparse.quote(_mail_body_raw)
+        st.markdown(
+            f'<a href="mailto:?subject={_mail_subject}&body={_mail_body}" target="_blank" '
+            f'style="display:flex;align-items:center;justify-content:center;height:2.4rem;'
+            f'border-radius:10px;border:1.5px solid var(--input-bdr);background:var(--input-bg);'
+            f'color:var(--text-main);text-decoration:none;font-size:0.85rem;font-weight:600;">'
+            f'✉️ Email This Brief</a>',
+            unsafe_allow_html=True
+        )
 
     # ── FOOTER ──
     time_str = f' · {listen_time}' if listen_time else ''
@@ -2468,6 +2526,43 @@ def _log_visit_and_get_streak() -> int:
 
 _checkin_streak = _log_visit_and_get_streak()
 
+# ── ADAPTIVE SEND-TIME — logs the clock time of each "Generate" click and,
+# once there's enough history, suggests the time you actually tend to use
+# this rather than assuming a fixed morning slot. Purely informational —
+# there's no scheduler/notification system here to act on it automatically.
+GEN_TIME_LOG_FILE = ".saticast_gen_time_log.json"
+
+
+def _log_generation_time() -> None:
+    try:
+        times = []
+        if os.path.exists(GEN_TIME_LOG_FILE):
+            with open(GEN_TIME_LOG_FILE, "r") as f:
+                times = json.load(f)
+        times.append(datetime.now().strftime("%H:%M"))
+        times = times[-30:]  # keep the file small — recent pattern matters more than all-time
+        with open(GEN_TIME_LOG_FILE, "w") as f:
+            json.dump(times, f)
+    except Exception:
+        pass
+
+
+def _suggested_gen_time() -> str:
+    """Returns 'HH:MM' string for the median logged generation time, or ''
+    if there isn't enough history yet (fewer than 5 runs)."""
+    try:
+        if not os.path.exists(GEN_TIME_LOG_FILE):
+            return ""
+        with open(GEN_TIME_LOG_FILE, "r") as f:
+            times = json.load(f)
+        if len(times) < 5:
+            return ""
+        minutes = sorted(int(t.split(":")[0]) * 60 + int(t.split(":")[1]) for t in times)
+        median_min = minutes[len(minutes) // 2]
+        return f"{median_min // 60:02d}:{median_min % 60:02d}"
+    except Exception:
+        return ""
+
 # ═══════════════════════════════════════════════════
 # MASTHEAD
 # ═══════════════════════════════════════════════════
@@ -2531,20 +2626,42 @@ def pick_one_pill(label: str, options: list, state_key: str, default: str):
 
 
 def _pill_grid_fallback(label: str, options: list, state_key: str, default: str, per_row: int = 3):
+    """Renders a compact, wrapping row of chip-style buttons.
+
+    Earlier versions of this used st.columns(per_row) + a CSS sibling/marker
+    selector to size and highlight the buttons. That selector depended on
+    an exact DOM-nesting assumption (marker div and column block being true
+    siblings) which broke silently on a Streamlit version bump: the
+    override stopped matching, every pill fell through to the app's global
+    '.stButton > button' rule (meant only for the big "Generate" CTA), and
+    every option rendered as a giant uppercase pill filling its whole
+    column — the "huge ugly buttons" bug.
+
+    Fix: target buttons by their own `key`, via the `st-key-<key>` class
+    Streamlit attaches to each widget's wrapper div. This needs no
+    assumption about nesting depth or sibling order, so it can't be broken
+    by Streamlit changing how it wraps columns internally. Requires
+    Streamlit >= 1.36 (pinned in requirements.txt).
+    """
     st.markdown(f'<div class="pill-label">{label}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="pill-scope-fallback"></div>', unsafe_allow_html=True)
-    for row_start in range(0, len(options), per_row):
-        row_opts = options[row_start:row_start + per_row]
-        cols = st.columns(per_row)
-        for i, opt in enumerate(row_opts):
-            with cols[i]:
-                is_sel = st.session_state[state_key] == opt
-                btn_label = f"✓ {opt}" if is_sel else opt
-                if is_sel:
-                    st.markdown('<div class="pill-selected-marker"></div>', unsafe_allow_html=True)
-                if st.button(btn_label, key=f"{state_key}_btn_{row_start + i}", use_container_width=True):
-                    st.session_state[state_key] = opt
-                    st.rerun()
+    current = st.session_state[state_key]
+    group_key = f"pillgroup_{state_key}"
+    with st.container(key=group_key):
+        selected_idx = options.index(current) if current in options else -1
+        if selected_idx >= 0:
+            st.markdown(
+                f'<style>.st-key-pillopt_{state_key}_{selected_idx} button {{'
+                f'background:linear-gradient(135deg,#D97757,#B45532) !important;'
+                f'color:#FFFFFF !important;border:none !important;font-weight:800 !important;'
+                f'}}</style>',
+                unsafe_allow_html=True
+            )
+        for i, opt in enumerate(options):
+            is_sel = i == selected_idx
+            btn_label = f"✓ {opt}" if is_sel else opt
+            if st.button(btn_label, key=f"pillopt_{state_key}_{i}"):
+                st.session_state[state_key] = opt
+                st.rerun()
     return st.session_state[state_key]
 
 
@@ -2581,6 +2698,32 @@ extra_tickers = tuple(
     (sym.strip().upper(), sym.strip().upper())
     for sym in watchlist_input.split(",") if sym.strip()
 )[:8]  # capped to keep the market-fetch fan-out bounded
+
+# ── PEOPLE/COMPANY WATCHLIST — a separate free-text list (not tickers)
+# scanned against live headlines so a mention of someone/something you
+# care about is called out instead of scrolling past it. Pure keyword
+# match, no extra API call.
+if "pref_topic_watchlist" not in st.session_state:
+    st.session_state.pref_topic_watchlist = load_shared_settings().get("topic_watchlist", "")
+topic_watchlist_input = st.text_input(
+    "🔎 Watch for mentions of (people, companies, topics — comma-separated)",
+    placeholder="e.g. Elon Musk, Anthropic, Reserve Bank of India",
+    key="pref_topic_watchlist",
+    help="Any live headline mentioning these gets a 👀 highlight badge, so you don't scroll past something you care about."
+)
+if topic_watchlist_input.strip():
+    save_shared_settings({"topic_watchlist": topic_watchlist_input.strip()})
+watch_terms = [t.strip() for t in topic_watchlist_input.split(",") if t.strip()]
+
+# ── TODAY'S MEETING COUNT — feeds two things: an adaptively shorter brief
+# on a packed day, and a small "protect focus time" nudge on a lighter one.
+# No real calendar integration (would need a connector this app doesn't
+# have), so this is a manual number rather than an auto-pulled one.
+meeting_count = st.number_input(
+    "📅 Meetings on your calendar today (optional)",
+    min_value=0, max_value=20, value=0, step=1, key="pref_meeting_count",
+    help="Used only to adapt the brief's length and suggest a focus block — no calendar is actually connected."
+)
 
 voice_cfg    = VOICE_OPTIONS[voice_choice]
 lang_code    = voice_cfg["lang"]
@@ -2666,9 +2809,19 @@ if in_cooldown:
         unsafe_allow_html=True
     )
 
+_suggested_time = _suggested_gen_time()
+if _suggested_time:
+    st.markdown(
+        f'<div style="text-align:center;font-size:0.78rem;opacity:0.65;margin-bottom:0.4rem;">'
+        f'⏰ You usually generate your brief around <strong>{_suggested_time}</strong> — '
+        f'based on your recent runs</div>',
+        unsafe_allow_html=True
+    )
+
 trigger = st.button("🪷 Generate Morning Brief", disabled=in_cooldown)
 
 if trigger:
+    _log_generation_time()
     st.session_state.last_gen_time = time.time()
 
     if not chosen_topics:
@@ -2808,8 +2961,18 @@ if trigger:
         slot.markdown(render_loader(2), unsafe_allow_html=True)
 
         # ── LAUNCH SCRIPT + ONE CALL PER MISSING NEWS TOPIC + MISC + OPTIONAL RELEVANCE — ALL IN PARALLEL ──
+        # Adaptive length — a packed calendar gets a tighter spoken script;
+        # a light day gets the normal-length one. No real calendar
+        # connector here, so this reads the manual meeting-count input.
+        _mc = st.session_state.get("pref_meeting_count", 0)
+        length_hint = (
+            "Today looks packed — keep spoken_script tight and under 130 words so the listener isn't rushed."
+            if _mc >= 5 else
+            "Moderate day — keep spoken_script under 200 words." if _mc >= 2 else ""
+        )
+
         with ThreadPoolExecutor(max_workers=max(4, len(llm_news_topics) + 3)) as ex:
-            fut_script = ex.submit(call_script, user_ctx)
+            fut_script = ex.submit(call_script, user_ctx, length_hint)
             fut_news   = {t: ex.submit(call_news_topic, t) for t in llm_news_topics}
             fut_misc   = ex.submit(call_misc, user_ctx) if needs_misc_call else None
             fut_relevance = (
@@ -2900,6 +3063,7 @@ if trigger:
             "audio_b64":   audio_b64,
             "listen_time": listen_time,
             "gen_date":    datetime.now().strftime("%b %d, %Y"),
+            "meeting_count": _mc,
             "fresh":       True,
         }
 
